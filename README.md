@@ -19,41 +19,14 @@ Use LeakLens only on codebases, repositories, and websites you are authorized to
 
 ## Install
 
-LeakLens supports three install paths:
+LeakLens supports two install paths:
 
-- Download a ready binary from GitHub Releases.
 - Install from source with `go install`.
 - Build locally with optional Vectorscan/Hyperscan acceleration.
-
-### Ready Binary
-
-When release assets are published, this is the simplest path because it does not require Go or native build dependencies.
-
-Download the asset that matches your OS and CPU:
-
-| Platform | Asset name |
-| --- | --- |
-| macOS Apple Silicon | `leaklens-darwin-arm64` |
-| macOS Intel | `leaklens-darwin-amd64` |
-| Linux x86_64 | `leaklens-linux-amd64` |
-| Linux ARM64 | `leaklens-linux-arm64` |
-
-Example:
-
-```bash
-curl -L -o leaklens \
-  https://github.com/dinosn/leaklens/releases/latest/download/leaklens-darwin-arm64
-chmod +x leaklens
-sudo mv leaklens /usr/local/bin/leaklens
-leaklens version
-```
-
-If no release assets exist yet, use `go install` or build from the local checkout.
 
 ### Go Install
 
 `go install` installs directly from the GitHub repository and writes the binary to `$(go env GOPATH)/bin`.
-It compiles LeakLens on your machine; use GitHub Releases when you want a prebuilt binary download.
 Make sure that directory is in your `PATH`.
 
 Pure-Go install:
