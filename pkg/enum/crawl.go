@@ -45,6 +45,7 @@ type CrawlEnumerator struct {
 	ChromeWSURL        string
 	SystemChromePath   string
 	NoIncognito        bool
+	NoSandbox          bool
 	AutomaticFormFill  bool
 	AuthCredentials    string
 	UseInstalledChrome bool
@@ -69,6 +70,7 @@ type CrawlConfig struct {
 	ChromeWSURL        string
 	SystemChromePath   string
 	NoIncognito        bool
+	NoSandbox          bool
 	AutomaticFormFill  bool
 	AuthCredentials    string
 	UseInstalledChrome bool
@@ -109,6 +111,7 @@ func NewCrawlEnumerator(cfg CrawlConfig) *CrawlEnumerator {
 		ChromeWSURL:        cfg.ChromeWSURL,
 		SystemChromePath:   cfg.SystemChromePath,
 		NoIncognito:        cfg.NoIncognito,
+		NoSandbox:          cfg.NoSandbox,
 		AutomaticFormFill:  cfg.AutomaticFormFill,
 		AuthCredentials:    cfg.AuthCredentials,
 		UseInstalledChrome: cfg.UseInstalledChrome,
@@ -180,6 +183,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		ChromeWSUrl:         e.ChromeWSURL,
 		SystemChromePath:    e.SystemChromePath,
 		HeadlessNoIncognito: e.NoIncognito,
+		HeadlessNoSandbox:   e.headlessNoSandbox(),
 		AutomaticFormFill:   e.AutomaticFormFill,
 		AuthCredentials:     e.AuthCredentials,
 		UseInstalledChrome:  e.UseInstalledChrome,
@@ -219,6 +223,9 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	}
 	if e.Headless {
 		options.Headless = true
+		if options.HeadlessNoSandbox && !e.NoSandbox {
+			fmt.Fprintf(os.Stderr, "warning: running as root; enabling Chrome --no-sandbox for headless crawl\n")
+		}
 	}
 
 	// Suppress katana's own log output by replacing the gologger writer
@@ -333,6 +340,17 @@ func (e *CrawlEnumerator) runCrawlWithDeadline(ctx context.Context, engine inter
 			return nil, true
 		}
 	}
+}
+
+func (e *CrawlEnumerator) headlessNoSandbox() bool {
+	return shouldUseHeadlessNoSandboxForEUID(e.NoSandbox, e.Headless, e.ChromeWSURL, currentEUID())
+}
+
+func shouldUseHeadlessNoSandboxForEUID(explicit, headless bool, chromeWSURL string, euid int) bool {
+	if explicit {
+		return true
+	}
+	return headless && chromeWSURL == "" && euid == 0
 }
 
 func (e *CrawlEnumerator) urlCandidates(rawURL string) []string {

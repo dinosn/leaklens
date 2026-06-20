@@ -274,6 +274,7 @@ Targets can be:
 | `--crawl-system-chrome-path` | | Chrome or Chromium binary path. |
 | `--crawl-use-installed-chrome` | `false` | Use installed Chrome instead of Katana-managed Chrome. |
 | `--crawl-no-incognito` | `false` | Run headless crawl without an incognito context. |
+| `--crawl-no-sandbox` | `false` | Run headless Chrome with `--no-sandbox`. Auto-enabled when LeakLens launches headless Chrome as root. |
 | `--crawl-automatic-form-fill` | `false` | Enable Katana automatic form filling and submission. |
 | `--crawl-auth` | | `username:password` for Katana automatic login. |
 

@@ -91,6 +91,7 @@ var (
 	scanCrawlChromeWSURL     string
 	scanCrawlSystemChrome    string
 	scanCrawlNoIncognito     bool
+	scanCrawlNoSandbox       bool
 	scanCrawlAutoFormFill    bool
 	scanCrawlAuth            string
 	scanCrawlInstalledChrome bool
@@ -150,6 +151,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanCrawlSystemChrome, "crawl-system-chrome-path", "", "Chrome/Chromium binary path for headless crawling")
 	scanCmd.Flags().BoolVar(&scanCrawlInstalledChrome, "crawl-use-installed-chrome", false, "Use installed Chrome instead of Katana-managed Chrome")
 	scanCmd.Flags().BoolVar(&scanCrawlNoIncognito, "crawl-no-incognito", false, "Run headless crawl without an incognito context")
+	scanCmd.Flags().BoolVar(&scanCrawlNoSandbox, "crawl-no-sandbox", false, "Run headless Chrome with --no-sandbox (auto-enabled when running as root)")
 	scanCmd.Flags().BoolVar(&scanCrawlAutoFormFill, "crawl-automatic-form-fill", false, "Enable Katana automatic form filling and submission")
 	scanCmd.Flags().StringVar(&scanCrawlAuth, "crawl-auth", "", "username:password for Katana automatic login")
 
@@ -177,7 +179,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			"crawl-rate-limit", "crawl-host-rate-limit", "crawl-timeout", "crawl-extensions",
 			"crawl-scope", "crawl-base-url", "crawl-max-domain-pages", "crawl-chrome-data-dir",
 			"crawl-chrome-ws-url", "crawl-system-chrome-path", "crawl-use-installed-chrome",
-			"crawl-no-incognito", "crawl-automatic-form-fill", "crawl-auth"}
+			"crawl-no-incognito", "crawl-no-sandbox", "crawl-automatic-form-fill", "crawl-auth"}
 		for _, name := range crawlFlags {
 			if cmd.Flags().Changed(name) {
 				scanCrawl = true
@@ -327,6 +329,7 @@ func runCrawlScan(cmd *cobra.Command, targetURL string) error {
 		ChromeWSURL:        scanCrawlChromeWSURL,
 		SystemChromePath:   scanCrawlSystemChrome,
 		NoIncognito:        scanCrawlNoIncognito,
+		NoSandbox:          scanCrawlNoSandbox,
 		AutomaticFormFill:  scanCrawlAutoFormFill,
 		AuthCredentials:    scanCrawlAuth,
 		UseInstalledChrome: scanCrawlInstalledChrome,

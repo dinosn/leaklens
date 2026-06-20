@@ -50,3 +50,24 @@ func TestCrawlURLCandidatesDoNotRepairCrossHost(t *testing.T) {
 		t.Fatalf("unexpected candidates:\n got: %#v\nwant: %#v", got, want)
 	}
 }
+
+func TestShouldUseHeadlessNoSandboxForRootHeadlessLaunch(t *testing.T) {
+	got := shouldUseHeadlessNoSandboxForEUID(false, true, "", 0)
+	if !got {
+		t.Fatal("expected root headless launch to enable no-sandbox")
+	}
+}
+
+func TestShouldUseHeadlessNoSandboxNotNeededWhenAttachingChrome(t *testing.T) {
+	got := shouldUseHeadlessNoSandboxForEUID(false, true, "ws://127.0.0.1:9222/devtools/browser/test", 0)
+	if got {
+		t.Fatal("expected Chrome websocket attach to avoid no-sandbox auto-enable")
+	}
+}
+
+func TestShouldUseHeadlessNoSandboxExplicitFlag(t *testing.T) {
+	got := shouldUseHeadlessNoSandboxForEUID(true, false, "ws://127.0.0.1:9222/devtools/browser/test", 1000)
+	if !got {
+		t.Fatal("expected explicit no-sandbox flag to be honored")
+	}
+}
