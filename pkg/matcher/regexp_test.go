@@ -1,0 +1,265 @@
+//go:build !wasm
+
+package matcher
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/dinosn/leaklens/pkg/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestMatchParallel_Correctness tests that parallel matching produces correct results
+func TestMatchParallel_Correctness(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:      "test-rule-1",
+			Name:    "Test Password Pattern",
+			Pattern: `password\s*=\s*"([^"]+)"`,
+		},
+		{
+			ID:      "test-rule-2",
+			Name:    "Test API Key Pattern",
+			Pattern: `api_key\s*=\s*"([^"]+)"`,
+		},
+	}
+
+	// Create content >10KB to trigger parallel path
+	var contentBuilder strings.Builder
+	for i := 0; i < 500; i++ {
+		contentBuilder.WriteString(`password = "secret123"` + "\n")
+		contentBuilder.WriteString(`api_key = "key456"` + "\n")
+		contentBuilder.WriteString("some other line\n")
+	}
+	content := []byte(contentBuilder.String())
+	require.Greater(t, len(content), 10000, "Content must be >10KB to trigger parallel path")
+
+	matcher, err := NewPortableRegexp(rules, 0)
+	require.NoError(t, err)
+
+	matches, err := matcher.Match(content)
+	require.NoError(t, err)
+
+	// Should find both patterns
+	assert.NotEmpty(t, matches, "Should find matches in large content")
+
+	// Verify we have matches for both rules
+	ruleMatches := make(map[string]int)
+	for _, match := range matches {
+		ruleMatches[match.RuleID]++
+	}
+
+	assert.Contains(t, ruleMatches, "test-rule-1", "Should match password pattern")
+	assert.Contains(t, ruleMatches, "test-rule-2", "Should match API key pattern")
+
+	// With content-based deduplication (NoseyParker behavior), same secret value = 1 finding
+	assert.Equal(t, 1, ruleMatches["test-rule-1"], "Should deduplicate identical password content")
+	assert.Equal(t, 1, ruleMatches["test-rule-2"], "Should deduplicate identical API key content")
+}
+
+// TestMatchParallel_vs_Sequential_Equivalence tests that parallel and sequential paths return same results
+func TestMatchParallel_vs_Sequential_Equivalence(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:      "equiv-rule-1",
+			Name:    "Email Pattern",
+			Pattern: `\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b`,
+		},
+		{
+			ID:      "equiv-rule-2",
+			Name:    "URL Pattern",
+			Pattern: `https?://[^\s]+`,
+		},
+	}
+
+	// Create content with varying sizes
+	testCases := []struct {
+		name        string
+		contentSize int // in iterations
+	}{
+		{"small", 10},   // <10KB - sequential path
+		{"medium", 100}, // ~10KB - boundary
+		{"large", 1000}, // >10KB - parallel path
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var contentBuilder strings.Builder
+			for i := 0; i < tc.contentSize; i++ {
+				contentBuilder.WriteString("user@example.com\n")
+				contentBuilder.WriteString("https://example.com/path\n")
+				contentBuilder.WriteString("some other content\n")
+			}
+			content := []byte(contentBuilder.String())
+
+			matcher, err := NewPortableRegexp(rules, 2)
+			require.NoError(t, err)
+
+			matches, err := matcher.Match(content)
+			require.NoError(t, err)
+
+			// Verify consistent results
+			assert.NotEmpty(t, matches, "Should find matches")
+
+			// Check rule coverage
+			ruleIDs := make(map[string]bool)
+			for _, match := range matches {
+				ruleIDs[match.RuleID] = true
+			}
+
+			assert.True(t, ruleIDs["equiv-rule-1"], "Should match email pattern")
+			assert.True(t, ruleIDs["equiv-rule-2"], "Should match URL pattern")
+		})
+	}
+}
+
+// TestMatch_FindingID_Populated verifies that FindingID is set on all returned matches
+func TestMatch_FindingID_Populated(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:           "np.aws.1",
+			Name:         "AWS API Key",
+			Pattern:      `(AKIA[0-9A-Z]{16})`,
+			StructuralID: "1e4113c48323df7405840eede9a2be89a9797520",
+		},
+	}
+
+	content := []byte("aws_access_key=AKIAZ52KNG5GARBXTEST\n")
+
+	matcher, err := NewPortableRegexp(rules, 0)
+	require.NoError(t, err)
+
+	matches, err := matcher.Match(content)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	match := matches[0]
+	assert.NotEmpty(t, match.FindingID, "FindingID should be populated")
+	assert.Len(t, match.FindingID, 40, "FindingID should be 40-char SHA-1 hex")
+
+	// Verify it matches the expected NoseyParker-compatible value
+	expectedFindingID := types.ComputeFindingID(rules[0].StructuralID, match.Groups)
+	assert.Equal(t, expectedFindingID, match.FindingID)
+
+	// NoseyParker v0.24.0 produces this finding_id for np.aws.1 + "AKIAZ52KNG5GARBXTEST"
+	assert.Equal(t, "59141806118796593f3d14bae57834b794d3421b", match.FindingID)
+}
+
+// TestPortableRegexp_TimeoutIsTolerated verifies that a regex timeout on one rule
+// does NOT kill the scan; matches from other rules are still returned.
+func TestPortableRegexp_TimeoutIsTolerated(t *testing.T) {
+	// Build a catastrophic-backtracking pattern that will reliably time out under regexp2.
+	// The pattern (a+)+ on a string of a's followed by a non-match is the canonical example.
+	// We pair it with a benign rule so we can verify the benign rule still produces results.
+	rules := []*types.Rule{
+		{
+			ID:      "catastrophic-rule",
+			Name:    "Catastrophic Backtracking",
+			Pattern: `(a+)+b`, // Known catastrophic backtracking pattern
+		},
+		{
+			ID:      "good-rule",
+			Name:    "Good Pattern",
+			Pattern: `password\s*=\s*"([^"]+)"`,
+		},
+	}
+
+	// Content: long string of 'a's (no 'b' at end → catastrophic backtracking on rule 1)
+	// plus a password match that rule 2 should find.
+	catastrophicContent := strings.Repeat("a", 5000) + "c" // no 'b' → triggers timeout on rule 1
+	content := []byte(catastrophicContent + "\n" + `password = "secret123"`)
+
+	m, err := NewPortableRegexp(rules, 0)
+	require.NoError(t, err)
+
+	// This must NOT return an error even though catastrophic-rule times out.
+	matches, err := m.MatchWithBlobID(content, types.ComputeBlobID(content))
+	require.NoError(t, err, "timeout on one rule must not propagate as error")
+
+	// The good-rule must still produce its match.
+	ruleIDs := make(map[string]bool)
+	for _, match := range matches {
+		ruleIDs[match.RuleID] = true
+	}
+	assert.True(t, ruleIDs["good-rule"], "good-rule should still match despite other rule timing out")
+	assert.False(t, ruleIDs["catastrophic-rule"], "catastrophic-rule should not produce matches (timed out)")
+}
+
+// TestPortableRegexp_TimeoutIsTolerated_Parallel is the same test but for large content
+// that triggers the parallel path.
+func TestPortableRegexp_TimeoutIsTolerated_Parallel(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:      "catastrophic-rule",
+			Name:    "Catastrophic Backtracking",
+			Pattern: `(a+)+b`, // Known catastrophic backtracking pattern
+		},
+		{
+			ID:      "good-rule",
+			Name:    "Good Pattern",
+			Pattern: `password\s*=\s*"([^"]+)"`,
+		},
+	}
+
+	// Build content >10KB to trigger parallel path.
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("a", 5000) + "c\n")
+	for sb.Len() < parallelThreshold+1000 {
+		sb.WriteString(`password = "secret123"` + "\n")
+	}
+	content := []byte(sb.String())
+	require.Greater(t, len(content), parallelThreshold, "must trigger parallel path")
+
+	m, err := NewPortableRegexp(rules, 0)
+	require.NoError(t, err)
+
+	matches, err := m.MatchWithBlobID(content, types.ComputeBlobID(content))
+	require.NoError(t, err, "timeout on one rule must not propagate as error in parallel path")
+
+	ruleIDs := make(map[string]bool)
+	for _, match := range matches {
+		ruleIDs[match.RuleID] = true
+	}
+	assert.True(t, ruleIDs["good-rule"], "good-rule should still match in parallel path despite other rule timing out")
+}
+
+// TestMatchParallel_RaceDetector explicitly exercises parallel path with race detector
+func TestMatchParallel_RaceDetector(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:      "race-rule-1",
+			Name:    "Pattern 1",
+			Pattern: `secret_[0-9]+`,
+		},
+		{
+			ID:      "race-rule-2",
+			Name:    "Pattern 2",
+			Pattern: `token_[a-z]+`,
+		},
+		{
+			ID:      "race-rule-3",
+			Name:    "Pattern 3",
+			Pattern: `key_[A-Z]+`,
+		},
+	}
+
+	// Create large content to force parallel path
+	var contentBuilder strings.Builder
+	for i := 0; i < 1000; i++ {
+		contentBuilder.WriteString("secret_123 token_abc key_XYZ\n")
+	}
+	content := []byte(contentBuilder.String())
+	require.Greater(t, len(content), 10000)
+
+	matcher, err := NewPortableRegexp(rules, 1)
+	require.NoError(t, err)
+
+	// Run multiple times to increase chance of detecting races
+	for i := 0; i < 5; i++ {
+		matches, err := matcher.Match(content)
+		require.NoError(t, err)
+		assert.NotEmpty(t, matches, "iteration %d: should find matches", i)
+	}
+}

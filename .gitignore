@@ -1,0 +1,35 @@
+# Build outputs
+bin/
+dist/
+*.exe
+/leaklens
+
+# Scan output datastores
+leaklens.ds/
+
+# Build directories
+build/
+
+# Test outputs
+coverage.out
+*.db
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Claude output
+.feature-development/
+.capability-development/
+.claude/
+.worktrees/
+
+# block secret-scanning fixtures
+/testdata/secrets/

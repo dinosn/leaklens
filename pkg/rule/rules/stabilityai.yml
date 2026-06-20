@@ -1,0 +1,45 @@
+rules:
+  - name: Stability AI API Key
+    id: kingfisher.stabilityai.1
+    pattern: |
+      (?xi)
+      (?:stability|stable|dreamstudio|stabilityai)
+      (?:.|[\n\r]){0,40}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN|API)?
+      (?:.|[\n\r]){0,20}?
+      \b
+      (
+        sk-
+        [A-Za-z0-9]{48}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - stability_api_key = sk-AnmgropvAII5XEoxVPjbnSMG3XhacEwhJlLh8ossXh7K1iLP
+      - STABILITYAI_TOKEN=sk-gQHyuK4k6Vw2viJRaAnLh6zAULaWtUg40ZHWcYjw7JGutlW6
+      - stable_diffusion_key = sk-nwvJypEMFNASJLiPBgNnzJj1xsDwlHChbFRMNwVkzy3e4UJg
+      - dreamstudio_api_key=sk-nwvJypEMFNASJLiPBgNnzJj1xsDwlHChbFRMNwVkzy3e4UJg
+    references:
+      - https://platform.stability.ai/docs/api-reference#v1-user-account
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.stability.ai/v1/user/account
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              match_all_words: true
+              words:
+                - '"id"'
+                - '"email"'
