@@ -24,6 +24,16 @@ func TestScanCommand_DefaultOutputIsDatastore(t *testing.T) {
 		"default --output should be leaklens.ds datastore directory")
 }
 
+func TestScanCommand_DefaultCrawlUsesStandardCrawler(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"scan"})
+	require.NoError(t, err)
+
+	flag := cmd.Flags().Lookup("crawl-headless")
+	require.NotNil(t, flag, "--crawl-headless flag should exist")
+	assert.Equal(t, "false", flag.DefValue,
+		"default --crawl should use the standard crawler and avoid launching Chrome")
+}
+
 func TestCreateEnumerator_GitReturnsCombined(t *testing.T) {
 	// createEnumerator with useGit=true must return a *enum.CombinedEnumerator
 	// so that both git history and the working tree are scanned.

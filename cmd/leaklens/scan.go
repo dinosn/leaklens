@@ -140,7 +140,7 @@ func init() {
 	scanCmd.Flags().IntVar(&scanCrawlRateLimit, "crawl-rate-limit", defaultCrawlRateLimit, "Maximum crawl requests per second")
 	scanCmd.Flags().IntVar(&scanCrawlHostRateLimit, "crawl-host-rate-limit", 0, "Maximum crawl requests per second per host (0 uses --crawl-rate-limit)")
 	scanCmd.Flags().StringVar(&scanCrawlTimeout, "crawl-timeout", defaultCrawlTimeout, "Maximum crawl duration (e.g. 5m, 30s)")
-	scanCmd.Flags().BoolVar(&scanCrawlHeadless, "crawl-headless", true, "Use headless browser for crawling (discovers dynamically loaded scripts)")
+	scanCmd.Flags().BoolVar(&scanCrawlHeadless, "crawl-headless", false, "Use headless browser for crawling (discovers dynamically loaded scripts)")
 	scanCmd.Flags().BoolVar(&scanCrawlJSCrawl, "crawl-js-crawl", true, "Parse JavaScript files for additional endpoints during crawl")
 	scanCmd.Flags().StringVar(&scanCrawlExtensions, "crawl-extensions", defaultCrawlExtensions, "File extensions to match during crawl (comma-separated)")
 	scanCmd.Flags().StringVar(&scanCrawlScope, "crawl-scope", defaultCrawlScope, "Crawl scope: rdn (registered domain), dn (domain name), fqdn (exact hostname)")

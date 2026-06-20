@@ -149,7 +149,7 @@ leaklens scan --crawl https://example.com
 
 This default profile enables:
 
-- `--crawl-headless=true`
+- standard crawling without launching Chrome
 - `--crawl-js-crawl=true`
 - `--crawl-depth=3`
 - `--crawl-concurrency=2`
@@ -157,6 +157,12 @@ This default profile enables:
 - `--crawl-timeout=2m`
 - `--crawl-extensions=js,json`
 - `--crawl-scope=rdn`
+
+Use headless crawling only when the standard crawler misses browser-rendered assets:
+
+```bash
+leaklens scan --crawl --crawl-headless https://example.com
+```
 
 For richer web-app triage:
 
@@ -263,7 +269,7 @@ Targets can be:
 | `--crawl-rate-limit` | `3` | Maximum crawl requests per second. |
 | `--crawl-host-rate-limit` | `0` | Maximum requests per second per host. `0` uses `--crawl-rate-limit`. |
 | `--crawl-timeout` | `2m` | Maximum crawl duration. |
-| `--crawl-headless` | `true` | Use a headless browser for JS-heavy sites. |
+| `--crawl-headless` | `false` | Use a headless browser for JS-heavy sites. |
 | `--crawl-js-crawl` | `true` | Parse JavaScript files for additional endpoints. |
 | `--crawl-extensions` | `js,json` | File extensions to collect and scan. |
 | `--crawl-scope` | `rdn` | Scope: `rdn`, `dn`, or `fqdn`. |
