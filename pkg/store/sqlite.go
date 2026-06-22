@@ -182,6 +182,10 @@ func (s *SQLiteStore) AddProvenance(blobID types.BlobID, prov types.Provenance) 
 		if p.Commit != nil {
 			commitHash = p.Commit.CommitID
 		}
+	case types.URLProvenance:
+    	provType, path = "url", p.URL
+    case types.ArchiveProvenance:
+    	provType, path, repoPath = "archive", p.MemberPath, p.ArchivePath
 	case types.ExtendedProvenance:
 		provType = "extended"
 		payloadJSON, _ := json.Marshal(p.Payload)
@@ -215,6 +219,10 @@ func (s *SQLiteStore) GetAllProvenance(blobID types.BlobID) ([]types.Provenance,
 				prov.Commit = &types.CommitMetadata{CommitID: commitHash.String}
 			}
 			result = append(result, prov)
+		case "url":
+			result = append(result, types.URLProvenance{URL: path.String})
+		case "archive":
+			result = append(result, types.ArchiveProvenance{ArchivePath: repoPath.String, MemberPath: path.String})
 		case "extended":
 			var payload map[string]interface{}
 			if path.Valid {
