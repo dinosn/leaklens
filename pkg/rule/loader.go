@@ -47,6 +47,24 @@ func (l *Loader) LoadRule(data []byte) (*types.Rule, error) {
 	return convertYAMLRule(yamlFile.Rules[0]), nil
 }
 
+// LoadRules loads one or more rules from YAML bytes.
+func (l *Loader) LoadRules(data []byte) ([]*types.Rule, error) {
+	var yamlFile yamlRulesFile
+	if err := yaml.Unmarshal(data, &yamlFile); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	if len(yamlFile.Rules) == 0 {
+		return nil, fmt.Errorf("no rules found in YAML")
+	}
+
+	rules := make([]*types.Rule, 0, len(yamlFile.Rules))
+	for _, yr := range yamlFile.Rules {
+		rules = append(rules, convertYAMLRule(yr))
+	}
+	return rules, nil
+}
+
 // LoadRuleFile loads a rule from a YAML file path.
 func (l *Loader) LoadRuleFile(path string) (*types.Rule, error) {
 	data, err := os.ReadFile(path)
@@ -54,6 +72,53 @@ func (l *Loader) LoadRuleFile(path string) (*types.Rule, error) {
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
 	}
 	return l.LoadRule(data)
+}
+
+// LoadRulesFile loads one or more rules from a YAML file path.
+func (l *Loader) LoadRulesFile(path string) ([]*types.Rule, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+	return l.LoadRules(data)
+}
+
+// LoadRulesPath loads rules from a YAML file or all YAML files in a directory.
+func (l *Loader) LoadRulesPath(path string) ([]*types.Rule, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return l.LoadRulesFile(path)
+	}
+
+	var rules []*types.Rule
+	err = filepath.WalkDir(path, func(entryPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(entryPath)
+		if ext != ".yml" && ext != ".yaml" {
+			return nil
+		}
+		loaded, err := l.LoadRulesFile(entryPath)
+		if err != nil {
+			return fmt.Errorf("loading %s: %w", entryPath, err)
+		}
+		rules = append(rules, loaded...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) == 0 {
+		return nil, fmt.Errorf("no rules found in directory %s", path)
+	}
+	return rules, nil
 }
 
 // LoadRuleset loads a ruleset from YAML bytes.

@@ -46,12 +46,10 @@ func runRulesList(cmd *cobra.Command, args []string) error {
 
 	// Load rules (builtin or custom)
 	if rulesPath != "" {
-		// Custom rules from file
-		r, loadErr := loader.LoadRuleFile(rulesPath)
-		if loadErr != nil {
-			return fmt.Errorf("loading rules from %s: %w", rulesPath, loadErr)
+		rules, err = loader.LoadRulesPath(rulesPath)
+		if err != nil {
+			return fmt.Errorf("loading rules from %s: %w", rulesPath, err)
 		}
-		rules = []*types.Rule{r}
 	} else {
 		// Builtin rules
 		rules, err = loader.LoadBuiltinRules()
@@ -72,11 +70,16 @@ func runRulesList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Output based on format
 	switch outputFormat {
 	case "json":
+		if quiet {
+			return nil
+		}
 		return outputRulesJSON(cmd, rules)
 	case "table":
+		if quiet {
+			return nil
+		}
 		return outputRulesTable(cmd, rules)
 	default:
 		return fmt.Errorf("unknown output format: %s", outputFormat)

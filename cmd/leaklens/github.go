@@ -65,6 +65,10 @@ func init() {
 }
 
 func runGitHubScan(cmd *cobra.Command, args []string) error {
+	if githubOutputFormat != "human" && githubOutputFormat != "json" {
+		return fmt.Errorf("unknown output format: %s", githubOutputFormat)
+	}
+
 	token := githubToken
 	if token == "" {
 		token = os.Getenv("GITHUB_TOKEN")
@@ -221,6 +225,10 @@ func runGitHubScan(cmd *cobra.Command, args []string) error {
 
 	if err != nil {
 		return fmt.Errorf("scanning GitHub: %w", err)
+	}
+
+	if quiet {
+		return nil
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "GitHub scan complete: %d matches, %d findings\n", matchCount, findingCount)

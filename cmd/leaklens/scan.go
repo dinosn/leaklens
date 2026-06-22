@@ -169,6 +169,10 @@ type blobJob struct {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
+	if err := validateScanOptions(); err != nil {
+		return err
+	}
+
 	if !scanJSIntel && (scanJSIntelGeneric || scanJSIntelNPMCheck) {
 		scanJSIntel = true
 	}
@@ -338,6 +342,66 @@ func runCrawlScan(cmd *cobra.Command, targetURL string) error {
 	return runEnumeratorScan(cmd, enumerator)
 }
 
+func validateScanOptions() error {
+	switch scanOutputFormat {
+	case "human", "json", "sarif":
+	default:
+		return fmt.Errorf("unknown output format: %s", scanOutputFormat)
+	}
+	if scanMaxFileSize < 0 {
+		return fmt.Errorf("--max-file-size must be >= 0")
+	}
+	if scanContextLines < 0 {
+		return fmt.Errorf("--context-lines must be >= 0")
+	}
+	if scanWorkers < 1 {
+		return fmt.Errorf("--workers must be >= 1")
+	}
+	if scanValidateWorkers < 1 {
+		return fmt.Errorf("--validate-workers must be >= 1")
+	}
+	if extractMaxDepth < 0 {
+		return fmt.Errorf("--extract-max-depth must be >= 0")
+	}
+	if extractMaxSize != "" {
+		size, err := parseSize(extractMaxSize)
+		if err != nil {
+			return fmt.Errorf("parsing extract-max-size: %w", err)
+		}
+		if size <= 0 {
+			return fmt.Errorf("extract-max-size must be greater than 0")
+		}
+	}
+	if extractMaxTotal != "" {
+		size, err := parseSize(extractMaxTotal)
+		if err != nil {
+			return fmt.Errorf("parsing extract-max-total: %w", err)
+		}
+		if size <= 0 {
+			return fmt.Errorf("extract-max-total must be greater than 0")
+		}
+	}
+	if scanSQLiteRowLimit < 0 {
+		return fmt.Errorf("--sqlite-row-limit must be >= 0")
+	}
+	if scanCrawlDepth < 1 {
+		return fmt.Errorf("--crawl-depth must be >= 1")
+	}
+	if scanCrawlConcurrency < 1 {
+		return fmt.Errorf("--crawl-concurrency must be >= 1")
+	}
+	if scanCrawlRateLimit < 0 {
+		return fmt.Errorf("--crawl-rate-limit must be >= 0")
+	}
+	if scanCrawlHostRateLimit < 0 {
+		return fmt.Errorf("--crawl-host-rate-limit must be >= 0")
+	}
+	if scanCrawlMaxDomainPages < 0 {
+		return fmt.Errorf("--crawl-max-domain-pages must be >= 0")
+	}
+	return nil
+}
+
 func splitCommaList(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -352,6 +416,11 @@ func splitCommaList(value string) []string {
 
 // runEnumeratorScan is the shared scan logic for any enumerator (filesystem, URL, etc.).
 func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
+	if quiet {
+		restoreEnumLog := enum.SetLogOutput(io.Discard)
+		defer restoreEnumLog()
+	}
+
 	// Load rules
 	rules, err := loadRules(scanRulesPath, scanRulesInclude, scanRulesExclude)
 	if err != nil {
@@ -397,7 +466,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 
 	// Prepare inline output for human format
 	var outputMu sync.Mutex
-	inlineHuman := scanOutputFormat == "human"
+	inlineHuman := scanOutputFormat == "human" && !quiet
 	var sty *styles
 	if inlineHuman {
 		sty = scanStyles()
@@ -476,11 +545,15 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 				}
 			}
 			for _, warning := range result.Warnings {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: JS intelligence: %s\n", warning)
+				if !quiet {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: JS intelligence: %s\n", warning)
+				}
 			}
 			for _, source := range result.Sources {
 				if int64(len(source.Content)) > scanMaxFileSize {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: source-map source too large, skipping: %s\n", source.Path)
+					if !quiet {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: source-map source too large, skipping: %s\n", source.Path)
+					}
 					continue
 				}
 				derivedProv := sourceMapProvenance(prov.Path(), source.Path)
@@ -499,6 +572,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 			type batchItem struct {
 				blobID  types.BlobID
 				prov    types.Provenance
+				content []byte
 				size    int64
 				matches []*types.Match
 			}
@@ -510,6 +584,15 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 				}
 				err := s.ExecBatch(func(tx store.Store) error {
 					for _, item := range batch {
+						if ds != nil && ds.BlobStore != nil {
+							storedID, err := ds.BlobStore.Store(item.content)
+							if err != nil {
+								return fmt.Errorf("storing blob content: %w", err)
+							}
+							if storedID != item.blobID {
+								return fmt.Errorf("blob content hash mismatch: metadata=%s content=%s", item.blobID.Hex(), storedID.Hex())
+							}
+						}
 						if err := tx.AddBlob(item.blobID, item.size); err != nil {
 							return fmt.Errorf("storing blob: %w", err)
 						}
@@ -550,7 +633,9 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 			for job := range jobs {
 				matches, err := m.MatchWithBlobID(job.content, job.blobID)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "[warn] match error (skipping blob %s): %v\n", job.blobID.Hex(), err)
+					if !quiet {
+						fmt.Fprintf(os.Stderr, "[warn] match error (skipping blob %s): %v\n", job.blobID.Hex(), err)
+					}
 					continue
 				}
 
@@ -576,6 +661,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 				batch = append(batch, batchItem{
 					blobID:  job.blobID,
 					prov:    job.prov,
+					content: job.content,
 					size:    int64(len(job.content)),
 					matches: matches,
 				})
@@ -611,12 +697,10 @@ func loadRules(path, include, exclude string) ([]*types.Rule, error) {
 	var err error
 
 	if path != "" {
-		// Custom rules from file
-		r, err := loader.LoadRuleFile(path)
+		rules, err = loader.LoadRulesPath(path)
 		if err != nil {
 			return nil, err
 		}
-		rules = []*types.Rule{r}
 	} else {
 		// Builtin rules
 		rules, err = loader.LoadBuiltinRules()
@@ -661,6 +745,9 @@ func openScanStore(outputPath string, storeBlobs bool) (store.Store, *datastore.
 
 // printScanStats formats and prints scan statistics.
 func printScanStats(cmd *cobra.Command, format, outputPath string, totalBytes, blobCount, matchCount, skippedCount int64, duration time.Duration) {
+	if quiet {
+		return
+	}
 	speed := float64(totalBytes) / duration.Seconds()
 	newMatches := matchCount - skippedCount
 	statsLine := fmt.Sprintf("Scanned %d B from %d blobs in %d second (%.0f B/s); %d/%d new matches\n",
@@ -679,6 +766,10 @@ func printScanStats(cmd *cobra.Command, format, outputPath string, totalBytes, b
 
 // outputScanResults routes scan output to the appropriate formatter based on scanOutputFormat.
 func outputScanResults(cmd *cobra.Command, s store.Store, rules []*types.Rule, ruleMap map[string]*types.Rule, jsIntelCount int64) error {
+	if quiet {
+		return nil
+	}
+
 	if scanOutputFormat == "json" {
 		matches, err := s.GetAllMatches()
 		if err != nil {
@@ -745,6 +836,9 @@ func createEnumerator(target string, useGit bool) (enum.Enumerator, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing extract-max-size: %w", err)
 		}
+		if size <= 0 {
+			return nil, fmt.Errorf("extract-max-size must be greater than 0")
+		}
 		limits.MaxSize = size
 	}
 
@@ -752,6 +846,9 @@ func createEnumerator(target string, useGit bool) (enum.Enumerator, error) {
 		size, err := parseSize(extractMaxTotal)
 		if err != nil {
 			return nil, fmt.Errorf("parsing extract-max-total: %w", err)
+		}
+		if size <= 0 {
+			return nil, fmt.Errorf("extract-max-total must be greater than 0")
 		}
 		limits.MaxTotal = size
 	}
@@ -783,7 +880,7 @@ type repoTarget struct {
 	Platform string // "github" or "gitlab"
 	Owner    string // org/user
 	Repo     string // repository/project name
-	FullPath string // "owner/repo"
+	FullPath string // "owner/repo" or full GitLab namespace path
 }
 
 // parseRepoURL detects if a target string is a GitHub or GitLab repository reference.
@@ -801,21 +898,35 @@ func parseRepoURL(target string) (repoTarget, bool) {
 	cleaned = strings.TrimSuffix(cleaned, ".git")
 	cleaned = strings.TrimSuffix(cleaned, "/")
 
-	parts := strings.SplitN(cleaned, "/", 4) // host/owner/repo[/extra]
-	if len(parts) < 3 {
+	parts := strings.SplitN(cleaned, "/", 2) // host/path
+	if len(parts) != 2 {
 		return repoTarget{}, false
 	}
-
 	host := strings.ToLower(parts[0])
-	owner := parts[1]
-	repo := parts[2]
+	pathParts := splitPath(parts[1])
 
 	var platform string
+	var owner, repo, fullPath string
 	switch host {
 	case "github.com":
+		if len(pathParts) < 2 {
+			return repoTarget{}, false
+		}
 		platform = "github"
+		owner = pathParts[0]
+		repo = pathParts[1]
+		fullPath = owner + "/" + repo
 	case "gitlab.com":
+		if routeIndex := indexPathPart(pathParts, "-"); routeIndex >= 0 {
+			pathParts = pathParts[:routeIndex]
+		}
+		if len(pathParts) < 2 {
+			return repoTarget{}, false
+		}
 		platform = "gitlab"
+		owner = pathParts[0]
+		repo = pathParts[len(pathParts)-1]
+		fullPath = strings.Join(pathParts, "/")
 	default:
 		return repoTarget{}, false
 	}
@@ -824,8 +935,28 @@ func parseRepoURL(target string) (repoTarget, bool) {
 		Platform: platform,
 		Owner:    owner,
 		Repo:     repo,
-		FullPath: owner + "/" + repo,
+		FullPath: fullPath,
 	}, true
+}
+
+func splitPath(value string) []string {
+	parts := strings.Split(value, "/")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func indexPathPart(parts []string, value string) int {
+	for i, part := range parts {
+		if part == value {
+			return i
+		}
+	}
+	return -1
 }
 
 // runRepoScan handles scanning of GitHub/GitLab repositories detected from URL-like targets.
@@ -839,7 +970,7 @@ func runRepoScan(cmd *cobra.Command, rt repoTarget) error {
 		token = os.Getenv("GITLAB_TOKEN")
 	}
 
-	if token == "" {
+	if token == "" && !quiet {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Note: No %s token provided. Using unauthenticated access (public repos only).\n\n", rt.Platform)
 	}
 
@@ -1138,7 +1269,9 @@ func initValidationEngine() *validator.Engine {
 	embedded, err := validator.LoadEmbeddedValidators()
 	if err != nil {
 		// Log warning but continue
-		fmt.Fprintf(os.Stderr, "warning: failed to load embedded validators: %v\n", err)
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "warning: failed to load embedded validators: %v\n", err)
+		}
 	} else {
 		validators = append(validators, embedded...)
 	}
@@ -1152,14 +1285,14 @@ func validateMatches(ctx context.Context, engine *validator.Engine, matches []*t
 		return
 	}
 
-	if verbose {
+	if verbose && !quiet {
 		fmt.Fprintf(os.Stderr, "[validate] Starting validation for %d matches\n", len(matches))
 	}
 
 	// Submit all matches for async validation
 	results := make([]<-chan *types.ValidationResult, len(matches))
 	for i := range matches {
-		if verbose {
+		if verbose && !quiet {
 			fmt.Fprintf(os.Stderr, "[validate] Queueing match %d: rule=%s\n", i+1, matches[i].RuleID)
 		}
 		results[i] = engine.ValidateAsync(ctx, matches[i])
@@ -1169,13 +1302,13 @@ func validateMatches(ctx context.Context, engine *validator.Engine, matches []*t
 	for i, ch := range results {
 		result := <-ch
 		matches[i].ValidationResult = result
-		if verbose {
+		if verbose && !quiet {
 			fmt.Fprintf(os.Stderr, "[validate] Result %d: rule=%s status=%s confidence=%.1f message=%s\n",
 				i+1, matches[i].RuleID, result.Status, result.Confidence, result.Message)
 		}
 	}
 
-	if verbose {
+	if verbose && !quiet {
 		fmt.Fprintf(os.Stderr, "[validate] Validation complete\n")
 	}
 }

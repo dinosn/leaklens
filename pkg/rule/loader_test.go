@@ -1,6 +1,8 @@
 package rule
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 )
@@ -97,6 +99,66 @@ func TestLoadRule_MultipleRules(t *testing.T) {
 	_, err := loader.LoadRule([]byte(multipleYAML))
 	if err == nil {
 		t.Error("expected error for multiple rules")
+	}
+}
+
+func TestLoadRules_MultipleRules(t *testing.T) {
+	loader := NewLoader()
+
+	multipleYAML := `rules:
+  - name: Rule 1
+    id: np.test.1
+    pattern: test1
+  - name: Rule 2
+    id: np.test.2
+    pattern: test2
+`
+
+	rules, err := loader.LoadRules([]byte(multipleYAML))
+	if err != nil {
+		t.Fatalf("LoadRules failed: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+	if rules[0].ID != "np.test.1" || rules[1].ID != "np.test.2" {
+		t.Fatalf("unexpected rule IDs: %s, %s", rules[0].ID, rules[1].ID)
+	}
+}
+
+func TestLoadRulesPath_Directory(t *testing.T) {
+	loader := NewLoader()
+	dir := t.TempDir()
+
+	ruleOne := `rules:
+  - name: Rule 1
+    id: np.test.1
+    pattern: test1
+`
+	ruleTwo := `rules:
+  - name: Rule 2
+    id: np.test.2
+    pattern: test2
+`
+	if err := os.WriteFile(filepath.Join(dir, "one.yml"), []byte(ruleOne), 0644); err != nil {
+		t.Fatalf("failed to write first rule: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "two.yaml"), []byte(ruleTwo), 0644); err != nil {
+		t.Fatalf("failed to write second rule: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ignored.txt"), []byte("not yaml"), 0644); err != nil {
+		t.Fatalf("failed to write ignored file: %v", err)
+	}
+
+	rules, err := loader.LoadRulesPath(dir)
+	if err != nil {
+		t.Fatalf("LoadRulesPath failed: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+	if rules[0].ID != "np.test.1" || rules[1].ID != "np.test.2" {
+		t.Fatalf("unexpected rule IDs: %s, %s", rules[0].ID, rules[1].ID)
 	}
 }
 
