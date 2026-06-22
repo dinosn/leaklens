@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,11 +18,11 @@ env:
 
 jobs:
   build-and-test:
-    name: Build and Test (No CGO)
+    name: Build and Test
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
     - name: Set up Go
@@ -31,16 +31,17 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
-    - name: Build
-      run: make build
+    - name: Build pure-Go binary
+      run: make build-pure
 
     - name: Run tests
-      run: make test
+      run: go test ./...
 
     - name: Run vet
-      run: make vet
+      run: go vet ./...
 
-    - name: Verify binary exists
+    - name: Verify binary
       run: |
-        test -x ./dist/titus || (echo "Binary not created" && exit 1)
-        ./dist/titus version || ./dist/titus --help
+        test -x ./dist/leaklens
+        ./dist/leaklens ver
+        ./dist/leaklens --help >/dev/null
