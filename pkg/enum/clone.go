@@ -44,7 +44,7 @@ func (e *CloneEnumerator) Enumerate(ctx context.Context, callback func(content [
 
 		if err := e.cloneAndScan(ctx, repo, callback); err != nil {
 			// Log error and continue to next repo
-			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", repo.Name, err)
+			warnf("warning: skipping %s: %v\n", repo.Name, err)
 			continue
 		}
 	}
@@ -74,9 +74,9 @@ func (e *CloneEnumerator) cloneAndScan(ctx context.Context, repo RepoInfo, callb
 	}
 	cloneArgs = append(cloneArgs, repo.CloneURL, clonePath)
 
-	fmt.Fprintf(os.Stderr, "Cloning %s...\n", repo.Name)
+	warnf("Cloning %s...\n", repo.Name)
 	cmd := exec.CommandContext(ctx, "git", cloneArgs...)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = enumStderr()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("cloning %s: %w", repo.Name, err)
 	}

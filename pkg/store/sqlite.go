@@ -183,9 +183,9 @@ func (s *SQLiteStore) AddProvenance(blobID types.BlobID, prov types.Provenance) 
 			commitHash = p.Commit.CommitID
 		}
 	case types.URLProvenance:
-    	provType, path = "url", p.URL
-    case types.ArchiveProvenance:
-    	provType, path, repoPath = "archive", p.MemberPath, p.ArchivePath
+		provType, path = "url", p.URL
+	case types.ArchiveProvenance:
+		provType, path, repoPath = "archive", p.MemberPath, p.ArchivePath
 	case types.ExtendedProvenance:
 		provType = "extended"
 		payloadJSON, _ := json.Marshal(p.Payload)

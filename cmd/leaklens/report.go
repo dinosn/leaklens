@@ -78,6 +78,10 @@ func init() {
 }
 
 func runReport(cmd *cobra.Command, args []string) error {
+	if err := validateReportOptions(); err != nil {
+		return err
+	}
+
 	// Determine store path
 	storePath := reportDatastore
 
@@ -128,6 +132,10 @@ func runReport(cmd *cobra.Command, args []string) error {
 		ruleMap[r.ID] = r
 	}
 
+	if quiet {
+		return nil
+	}
+
 	// Output based on format
 	switch reportFormat {
 	case "json":
@@ -135,10 +143,24 @@ func runReport(cmd *cobra.Command, args []string) error {
 	case "human":
 		return outputReportHuman(cmd, findings, matches, storePath, ruleMap)
 	case "sarif":
-		return fmt.Errorf("SARIF output not yet implemented")
+		return outputSARIF(cmd, s, rules, matches)
 	default:
 		return fmt.Errorf("unknown output format: %s", reportFormat)
 	}
+}
+
+func validateReportOptions() error {
+	switch reportFormat {
+	case "human", "json", "sarif":
+	default:
+		return fmt.Errorf("unknown output format: %s", reportFormat)
+	}
+	switch reportColor {
+	case "auto", "always", "never":
+	default:
+		return fmt.Errorf("unknown color mode: %s", reportColor)
+	}
+	return nil
 }
 
 // =============================================================================

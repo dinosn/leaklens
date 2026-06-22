@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dinosn/leaklens/pkg/types"
@@ -72,6 +72,7 @@ func (e *URLEnumerator) Enumerate(ctx context.Context, callback func(content []b
 
 	origCtx := ctx
 	g, ctx := errgroup.WithContext(ctx)
+	var successCount atomic.Int64
 
 	g.Go(func() error {
 		defer close(urlsCh)
@@ -88,8 +89,12 @@ func (e *URLEnumerator) Enumerate(ctx context.Context, callback func(content []b
 	for i := 0; i < numWorkers; i++ {
 		g.Go(func() error {
 			for candidates := range urlsCh {
-				if err := e.processURLCandidates(ctx, candidates, callback); err != nil {
+				ok, err := e.processURLCandidates(ctx, candidates, callback)
+				if err != nil {
 					return err
+				}
+				if ok {
+					successCount.Add(1)
 				}
 			}
 			return nil
@@ -102,25 +107,28 @@ func (e *URLEnumerator) Enumerate(ctx context.Context, callback func(content []b
 	if origCtx.Err() != nil {
 		return origCtx.Err()
 	}
+	if len(e.URLCandidates) > 0 && successCount.Load() == 0 {
+		return fmt.Errorf("all URL fetches failed")
+	}
 	return nil
 }
 
-func (e *URLEnumerator) processURLCandidates(ctx context.Context, candidates []string, callback func(content []byte, blobID types.BlobID, prov types.Provenance) error) error {
+func (e *URLEnumerator) processURLCandidates(ctx context.Context, candidates []string, callback func(content []byte, blobID types.BlobID, prov types.Provenance) error) (bool, error) {
 	if len(candidates) == 0 {
-		return nil
+		return false, nil
 	}
 
 	var failures []string
 	for i, rawURL := range candidates {
 		ok, reason, err := e.processURL(ctx, rawURL, callback)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if ok {
 			if i > 0 {
-				fmt.Fprintf(os.Stderr, "  repaired: %s -> %s\n", candidates[0], rawURL)
+				warnf("  repaired: %s -> %s\n", candidates[0], rawURL)
 			}
-			return nil
+			return true, nil
 		}
 		if reason != "" {
 			failures = append(failures, fmt.Sprintf("%s for %s", reason, rawURL))
@@ -128,14 +136,14 @@ func (e *URLEnumerator) processURLCandidates(ctx context.Context, candidates []s
 	}
 
 	if len(failures) == 0 {
-		return nil
+		return false, nil
 	}
 	if len(candidates) == 1 {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", failures[0])
-		return nil
+		warnf("warning: %s\n", failures[0])
+		return false, nil
 	}
-	fmt.Fprintf(os.Stderr, "warning: all candidate URLs failed for %s: %s\n", candidates[0], strings.Join(failures, "; "))
-	return nil
+	warnf("warning: all candidate URLs failed for %s: %s\n", candidates[0], strings.Join(failures, "; "))
+	return false, nil
 }
 
 func (e *URLEnumerator) processURL(ctx context.Context, rawURL string, callback func(content []byte, blobID types.BlobID, prov types.Provenance) error) (bool, string, error) {

@@ -68,6 +68,10 @@ func init() {
 }
 
 func runGitLabScan(cmd *cobra.Command, args []string) error {
+	if gitlabOutputFormat != "human" && gitlabOutputFormat != "json" {
+		return fmt.Errorf("unknown output format: %s", gitlabOutputFormat)
+	}
+
 	token := gitlabToken
 	if token == "" {
 		token = os.Getenv("GITLAB_TOKEN")
@@ -215,6 +219,10 @@ func runGitLabScan(cmd *cobra.Command, args []string) error {
 
 	if err != nil {
 		return fmt.Errorf("scanning: %w", err)
+	}
+
+	if quiet {
+		return nil
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "GitLab scan complete: %d matches, %d findings\n", matchCount, findingCount)

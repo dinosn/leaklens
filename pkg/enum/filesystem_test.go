@@ -1,9 +1,11 @@
 package enum
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -219,6 +221,35 @@ func TestFilesystemEnumerator_BinaryFiles(t *testing.T) {
 	}
 	if len(foundFiles) > 0 && foundFiles[0] != "text.txt" {
 		t.Errorf("expected text.txt, got %s", foundFiles[0])
+	}
+}
+
+func TestFilesystemEnumerator_ExtractErrorWarns(t *testing.T) {
+	tmpDir := t.TempDir()
+	badZip := filepath.Join(tmpDir, "bad.zip")
+	if err := os.WriteFile(badZip, []byte{0x00, 'n', 'o', 't', 'z', 'i', 'p'}, 0644); err != nil {
+		t.Fatalf("failed to write bad zip: %v", err)
+	}
+
+	var output bytes.Buffer
+	restoreLogs := SetLogOutput(&output)
+	t.Cleanup(restoreLogs)
+
+	enumerator := NewFilesystemEnumerator(Config{
+		Root:            tmpDir,
+		ExtractArchives: "zip",
+		ExtractLimits:   DefaultExtractionLimits(),
+	})
+	err := enumerator.Enumerate(context.Background(), func(content []byte, blobID types.BlobID, prov types.Provenance) error {
+		t.Fatal("callback should not be called for corrupt archive")
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("enumerate failed: %v", err)
+	}
+	if !strings.Contains(output.String(), "warning: failed to extract") {
+		t.Fatalf("expected extraction warning, got %q", output.String())
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 	"sync"
@@ -213,7 +212,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 				seen[key] = struct{}{}
 				discoveredURLs = append(discoveredURLs, rawURL)
 				discoveredCandidates = append(discoveredCandidates, candidates)
-				fmt.Fprintf(os.Stderr, "  found: %s\n", rawURL)
+				warnf("  found: %s\n", rawURL)
 			}
 		},
 	}
@@ -224,7 +223,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	if e.Headless {
 		options.Headless = true
 		if options.HeadlessNoSandbox && !e.NoSandbox {
-			fmt.Fprintf(os.Stderr, "warning: running as root; enabling Chrome --no-sandbox for headless crawl\n")
+			warnf("warning: running as root; enabling Chrome --no-sandbox for headless crawl\n")
 		}
 	}
 
@@ -259,7 +258,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	closeEngine := func() {
 		closeOnce.Do(func() {
 			if err := engine.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "Crawl cleanup warning: %v\n", err)
+				warnf("Crawl cleanup warning: %v\n", err)
 			}
 		})
 	}
@@ -269,7 +268,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	if e.Headless {
 		mode = "headless"
 	}
-	fmt.Fprintf(os.Stderr, "Crawling %s (%s, depth=%d, extensions=%s)...\n",
+	warnf("Crawling %s (%s, depth=%d, extensions=%s)...\n",
 		e.TargetURL, mode, e.MaxDepth, strings.Join(e.Extensions, ","))
 
 	err, timedOut := e.runCrawlWithDeadline(ctx, engine, closeEngine)
@@ -285,24 +284,24 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			return ctx.Err()
 		}
 		if timedOut {
-			fmt.Fprintf(os.Stderr, "Crawl stopped: timeout %s reached\n", e.Timeout)
+			warnf("Crawl stopped: timeout %s reached\n", e.Timeout)
 		} else {
 			// Crawl timeout or other non-fatal crawl errors: log and continue
 			// with whatever URLs were discovered before the error.
-			fmt.Fprintf(os.Stderr, "Crawl stopped: %v\n", err)
+			warnf("Crawl stopped: %v\n", err)
 		}
 	} else if timedOut {
 		// Crawl timeout or other non-fatal crawl errors: log and continue
 		// with whatever URLs were discovered before the error.
-		fmt.Fprintf(os.Stderr, "Crawl stopped: timeout %s reached\n", e.Timeout)
+		warnf("Crawl stopped: timeout %s reached\n", e.Timeout)
 	}
 
 	if len(finalURLs) == 0 {
-		fmt.Fprintf(os.Stderr, "Crawl complete: no matching files found\n")
+		warnf("Crawl complete: no matching files found\n")
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Crawl complete: discovered %d unique %s file(s), downloading and scanning...\n",
+	warnf("Crawl complete: discovered %d unique %s file(s), downloading and scanning...\n",
 		len(finalURLs), strings.Join(e.Extensions, "/"))
 
 	urlEnum := NewURLEnumeratorWithCandidates(finalCandidates, e.MaxSize)
