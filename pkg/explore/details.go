@@ -203,6 +203,21 @@ func renderMatchDetails(m *matchRow, maxWidth int) []string {
 							p.Commit.AuthorEmail))
 					}
 				}
+			case types.URLProvenance:
+				lines = append(lines, fmt.Sprintf("  %s %s",
+					fieldLabelStyle.Render("URL:"),
+					fieldValueStyle.Render(p.URL)))
+			case types.ArchiveProvenance:
+				lines = append(lines, fmt.Sprintf("  %s %s",
+					fieldLabelStyle.Render("Archive:"),
+					fieldValueStyle.Render(p.ArchivePath)))
+				lines = append(lines, fmt.Sprintf("  %s %s",
+					fieldLabelStyle.Render("Member:"),
+					fieldValueStyle.Render(p.MemberPath)))
+			case types.ExtendedProvenance:
+				lines = append(lines, fmt.Sprintf("  %s %s",
+					fieldLabelStyle.Render("Source:"),
+					fieldValueStyle.Render(p.Path())))
 			}
 		}
 	}
