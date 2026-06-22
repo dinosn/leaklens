@@ -28,18 +28,18 @@ LeakLens supports two install paths:
 
 `go install` installs directly from the GitHub repository and writes the binary to `$(go env GOPATH)/bin`.
 Make sure that directory is in your `PATH`.
-Use `@current` to install the latest tested LeakLens branch.
+Use `@main` to install the latest tested LeakLens branch.
 
 Pure-Go install:
 
 ```bash
-go install github.com/dinosn/leaklens/cmd/leaklens@current
+go install github.com/dinosn/leaklens/cmd/leaklens@main
 ```
 
 Accelerated install with Vectorscan/Hyperscan:
 
 ```bash
-CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@current
+CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@main
 ```
 
 ### Local Build
@@ -101,13 +101,13 @@ export PATH="/opt/homebrew/bin:$PATH"
 go env -u GOARCH
 go env -u GOOS
 export PKG_CONFIG_PATH="$(brew --prefix vectorscan)/lib/pkgconfig:$PKG_CONFIG_PATH"
-CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@current
+CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@main
 ```
 
 Fallback without native acceleration:
 
 ```bash
-CGO_ENABLED=0 go install github.com/dinosn/leaklens/cmd/leaklens@current
+CGO_ENABLED=0 go install github.com/dinosn/leaklens/cmd/leaklens@main
 ```
 
 ## Quick Start
