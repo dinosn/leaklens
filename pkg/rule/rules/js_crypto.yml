@@ -1,0 +1,54 @@
+rules:
+  - name: Client-Side AES Key Candidate
+    id: leaklens.js.crypto.1
+    pattern: |
+      (?x)(?i)
+      \b
+      (?:var|let|const)? \s* ["']?
+      (?:
+        (?P<key_name>g_ac)
+        ["']?
+        \s* (?:=|:) \s*
+        ["']
+        (?P<key>
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*[0-9])
+          (?=[^\s"'\\]*[^A-Za-z0-9\s"'\\])
+          (?:[^\s"'\\]{16}|[^\s"'\\]{24}|[^\s"'\\]{32})
+        )
+        ["']
+      |
+        (?P<crypto_key_name>
+          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
+          |
+          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:key|secret)[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
+        )
+        ["']?
+        \s* (?:=|:) \s*
+        ["']
+        (?P<crypto_key>
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*[0-9])
+          (?:[^\s"'\\]{16}|[^\s"'\\]{24}|[^\s"'\\]{32})
+        )
+        ["']
+      )
+    categories:
+      - js
+      - crypto
+      - secret
+      - fuzzy
+    examples:
+      - 'var g_ac = "A1!bcdefghijklmn";'
+      - 'const aesKey = "a1bcdefghijklmno";'
+      - '{"cryptoSecret": "a1bcdefghijklmno"}'
+    negative_examples:
+      - 'var g_ac = "abcdefghijklmnop";'
+      - 'var displayName = "A1!bcdefghijklmn";'
+      - 'const aesKey = "short";'
+      - 'const accessKey = "a1bcdefghijklmno";'
+    description: >
+      A fixed-width client-side cryptographic key candidate was found in
+      JavaScript. The detector covers semantic AES/crypto/cipher key names and
+      the observed g_ac client-side AES key convention while avoiding generic
+      16-character string matches.
