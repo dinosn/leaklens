@@ -21,7 +21,7 @@ It uses regex-based detection rules to identify sensitive data like API keys, pa
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Quiet mode (errors only)")
-	rootCmd.PersistentFlags().BoolVar(&updateCheckDisabled, "no-update-check", false, "Disable GitHub release update check")
+	rootCmd.PersistentFlags().BoolVar(&updateCheckDisabled, "no-update-check", false, "Disable GitHub main update check")
 
 	// Add subcommands
 	rootCmd.AddCommand(scanCmd)

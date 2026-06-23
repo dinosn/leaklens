@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultUpdateCheckURL = "https://api.github.com/repos/dinosn/leaklens/releases/latest"
+const defaultUpdateCheckURL = "https://api.github.com/repos/dinosn/leaklens/commits/main"
 
 var (
 	updateCheckURL           = defaultUpdateCheckURL
@@ -26,30 +25,35 @@ var (
 type updateState string
 
 const (
-	updateStateLatest      updateState = "latest"
-	updateStateOutdated    updateState = "outdated"
-	updateStateDevelopment updateState = "development"
-	updateStateNoRelease   updateState = "no_release"
-	updateStateUnknown     updateState = "unknown"
+	updateStateLatest   updateState = "latest"
+	updateStateOutdated updateState = "outdated"
+	updateStateUnknown  updateState = "unknown"
 )
 
-type updateStatus struct {
-	State      updateState
-	Current    string
-	Latest     string
-	LatestURL  string
-	InstallRef string
+type buildIdentity struct {
+	Version  string
+	Revision string
 }
 
-type latestReleaseResponse struct {
-	TagName string `json:"tag_name"`
+type updateStatus struct {
+	State           updateState
+	Current         string
+	CurrentRevision string
+	Latest          string
+	LatestRevision  string
+	LatestURL       string
+	InstallRef      string
+}
+
+type latestMainResponse struct {
+	SHA     string `json:"sha"`
 	HTMLURL string `json:"html_url"`
 }
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Check for newer LeakLens release",
-	Long:  "Check whether this LeakLens binary matches the latest published GitHub release.",
+	Short: "Check for newer LeakLens main build",
+	Long:  "Check whether this LeakLens binary matches the latest GitHub main branch commit.",
 	RunE:  runUpdate,
 }
 
@@ -57,7 +61,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(commandContext(cmd), manualUpdateCheckTimeout)
 	defer cancel()
 
-	status, err := checkForUpdates(ctx, http.DefaultClient, updateCheckURL, currentVersionBase())
+	status, err := checkForUpdates(ctx, http.DefaultClient, updateCheckURL, currentBuildIdentity())
 	if err != nil {
 		return err
 	}
@@ -73,7 +77,7 @@ func notifyUpdateStatus(cmd *cobra.Command, args []string) {
 	ctx, cancel := context.WithTimeout(commandContext(cmd), updateCheckTimeout)
 	defer cancel()
 
-	status, err := checkForUpdates(ctx, http.DefaultClient, updateCheckURL, currentVersionBase())
+	status, err := checkForUpdates(ctx, http.DefaultClient, updateCheckURL, currentBuildIdentity())
 	if err != nil {
 		if verbose {
 			fmt.Fprintf(cmd.ErrOrStderr(), "LeakLens update check unavailable: %v\n", err)
@@ -123,10 +127,26 @@ func shouldPrintStartupUpdateStatus(status updateStatus) bool {
 	if verbose {
 		return true
 	}
-	return status.State != updateStateNoRelease
+	return status.State != updateStateUnknown
 }
 
-func checkForUpdates(ctx context.Context, client *http.Client, endpoint, current string) (updateStatus, error) {
+func currentBuildIdentity() buildIdentity {
+	return buildIdentity{
+		Version:  currentVersionBase(),
+		Revision: currentBuildRevision(),
+	}
+}
+
+func currentBuildRevision() string {
+	for _, setting := range currentBuildSettings() {
+		if setting.Key == "vcs.revision" {
+			return strings.TrimSpace(setting.Value)
+		}
+	}
+	return ""
+}
+
+func checkForUpdates(ctx context.Context, client *http.Client, endpoint string, current buildIdentity) (updateStatus, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -140,30 +160,22 @@ func checkForUpdates(ctx context.Context, client *http.Client, endpoint, current
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return updateStatus{}, fmt.Errorf("fetching latest release: %w", err)
+		return updateStatus{}, fmt.Errorf("fetching latest main commit: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return updateStatus{
-			State:   updateStateNoRelease,
-			Current: normalizeCurrentVersion(current),
-		}, nil
+		return classifyUpdateStatus(current, "", "")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return updateStatus{}, fmt.Errorf("fetching latest release: HTTP %d", resp.StatusCode)
+		return updateStatus{}, fmt.Errorf("fetching latest main commit: HTTP %d", resp.StatusCode)
 	}
 
-	var release latestReleaseResponse
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return updateStatus{}, fmt.Errorf("decoding latest release: %w", err)
+	var latest latestMainResponse
+	if err := json.NewDecoder(resp.Body).Decode(&latest); err != nil {
+		return updateStatus{}, fmt.Errorf("decoding latest main commit: %w", err)
 	}
-	latest := strings.TrimSpace(release.TagName)
-	if latest == "" {
-		return updateStatus{}, errors.New("latest release response did not include tag_name")
-	}
-
-	return classifyUpdateStatus(normalizeCurrentVersion(current), latest, strings.TrimSpace(release.HTMLURL)), nil
+	return classifyUpdateStatus(current, latest.SHA, strings.TrimSpace(latest.HTMLURL))
 }
 
 func normalizeCurrentVersion(current string) string {
@@ -174,52 +186,48 @@ func normalizeCurrentVersion(current string) string {
 	return current
 }
 
-func classifyUpdateStatus(current, latest, latestURL string) updateStatus {
+func classifyUpdateStatus(current buildIdentity, latestRevision, latestURL string) (updateStatus, error) {
+	currentVersion := normalizeCurrentVersion(current.Version)
+	currentRevision := resolveCurrentRevision(current)
+	latestRevision = normalizeRevision(latestRevision)
+	latest := shortRevision(latestRevision)
+	if latest == "" {
+		latest = "unknown"
+	}
+
 	status := updateStatus{
-		Current:    current,
-		Latest:     latest,
-		LatestURL:  latestURL,
-		InstallRef: latest,
+		Current:         currentVersion,
+		CurrentRevision: currentRevision,
+		Latest:          latest,
+		LatestRevision:  latestRevision,
+		LatestURL:       latestURL,
+		InstallRef:      "main",
 	}
 
-	if current == latest {
-		status.State = updateStateLatest
-		return status
-	}
-
-	if isDevelopmentVersion(current) {
-		status.State = updateStateDevelopment
-		return status
-	}
-
-	cmp, ok := compareReleaseVersions(current, latest)
-	if !ok {
+	if latestRevision == "" || currentRevision == "" {
 		status.State = updateStateUnknown
-		return status
+		return status, nil
 	}
-	if cmp < 0 {
-		status.State = updateStateOutdated
-		return status
+
+	if sameRevision(currentRevision, latestRevision) {
+		status.State = updateStateLatest
+		return status, nil
 	}
-	status.State = updateStateLatest
-	return status
+	status.State = updateStateOutdated
+	return status, nil
 }
 
-func isDevelopmentVersion(current string) bool {
-	current = strings.TrimSpace(current)
-	if current == "" || current == "source" || strings.HasPrefix(current, "commit ") {
-		return true
+func resolveCurrentRevision(current buildIdentity) string {
+	if revision := normalizeRevision(current.Revision); revision != "" {
+		return revision
 	}
-	if isGoPseudoVersion(current) {
-		return true
-	}
-	return false
+	return pseudoVersionRevision(current.Version)
 }
 
-func isGoPseudoVersion(current string) bool {
-	parts := strings.Split(strings.TrimPrefix(current, "v"), "-")
+func pseudoVersionRevision(current string) string {
+	parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(current, "v")), "-")
 	if len(parts) < 3 {
-		return false
+		return ""
 	}
 
 	timestamp := parts[len(parts)-2]
@@ -227,65 +235,51 @@ func isGoPseudoVersion(current string) bool {
 		timestamp = timestamp[idx+1:]
 	}
 	if len(timestamp) != 14 {
-		return false
+		return ""
 	}
 	for _, r := range timestamp {
 		if r < '0' || r > '9' {
-			return false
+			return ""
 		}
 	}
 
-	revision := parts[len(parts)-1]
+	revision := normalizeRevision(parts[len(parts)-1])
 	if len(revision) < 12 {
-		return false
+		return ""
+	}
+	return revision
+}
+
+func normalizeRevision(revision string) string {
+	revision = strings.ToLower(strings.TrimSpace(revision))
+	if revision == "" {
+		return ""
 	}
 	for _, r := range revision {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
+			return ""
 		}
 	}
-	return true
+	return revision
 }
 
-func compareReleaseVersions(current, latest string) (int, bool) {
-	currentVersion, ok := parseReleaseVersion(current)
-	if !ok {
-		return 0, false
+func sameRevision(current, latest string) bool {
+	current = normalizeRevision(current)
+	latest = normalizeRevision(latest)
+	if current == "" || latest == "" {
+		return false
 	}
-	latestVersion, ok := parseReleaseVersion(latest)
-	if !ok {
-		return 0, false
+	if len(current) <= len(latest) {
+		return strings.HasPrefix(latest, current)
 	}
-	for i := range currentVersion {
-		if currentVersion[i] < latestVersion[i] {
-			return -1, true
-		}
-		if currentVersion[i] > latestVersion[i] {
-			return 1, true
-		}
-	}
-	return 0, true
+	return strings.HasPrefix(current, latest)
 }
 
-func parseReleaseVersion(value string) ([3]int, bool) {
-	value = strings.TrimSpace(strings.TrimPrefix(value, "v"))
-	parts := strings.Split(value, ".")
-	if len(parts) != 3 {
-		return [3]int{}, false
+func updateCurrentLabel(status updateStatus) string {
+	if status.CurrentRevision == "" {
+		return status.Current
 	}
-
-	var parsed [3]int
-	for i, part := range parts {
-		if idx := strings.IndexByte(part, '-'); idx >= 0 {
-			part = part[:idx]
-		}
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 0 {
-			return [3]int{}, false
-		}
-		parsed[i] = n
-	}
-	return parsed, true
+	return fmt.Sprintf("%s (%s)", status.Current, shortRevision(status.CurrentRevision))
 }
 
 func printUpdateStatus(cmd *cobra.Command, status updateStatus, includeLatestStatus bool) {
@@ -295,26 +289,18 @@ func printUpdateStatus(cmd *cobra.Command, status updateStatus, includeLatestSta
 func printUpdateStatusTo(out io.Writer, status updateStatus, includeLatestStatus bool) {
 	switch status.State {
 	case updateStateOutdated:
-		fmt.Fprintf(out, "LeakLens update available: %s -> %s\n", status.Current, status.Latest)
+		fmt.Fprintf(out, "LeakLens main update available: %s -> %s\n", updateCurrentLabel(status), status.Latest)
 		if status.LatestURL != "" {
-			fmt.Fprintf(out, "Release: %s\n", status.LatestURL)
+			fmt.Fprintf(out, "Main: %s\n", status.LatestURL)
 		}
-		fmt.Fprintf(out, "Install: GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@%s\n", status.InstallRef)
+		fmt.Fprintln(out, "Install: GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main")
 	case updateStateLatest:
 		if includeLatestStatus {
-			fmt.Fprintf(out, "LeakLens is on the latest release: %s\n", status.Latest)
-		}
-	case updateStateDevelopment:
-		if includeLatestStatus {
-			fmt.Fprintf(out, "LeakLens is a development build (%s); latest release is %s\n", status.Current, status.Latest)
-		}
-	case updateStateNoRelease:
-		if includeLatestStatus {
-			fmt.Fprintf(out, "No GitHub release is published for LeakLens yet. Current build: %s\n", status.Current)
+			fmt.Fprintf(out, "LeakLens is on latest main: %s\n", status.Latest)
 		}
 	case updateStateUnknown:
 		if includeLatestStatus {
-			fmt.Fprintf(out, "LeakLens update status unknown: current %s, latest release %s\n", status.Current, status.Latest)
+			fmt.Fprintf(out, "LeakLens update status unknown: current %s, latest main %s\n", updateCurrentLabel(status), status.Latest)
 		}
 	}
 }
