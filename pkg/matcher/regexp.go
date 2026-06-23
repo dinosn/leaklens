@@ -144,7 +144,7 @@ func (m *RegexpMatcher) MatchWithBlobID(content []byte, blobID types.BlobID) ([]
 			result.FindingID = types.ComputeFindingID(rule.StructuralID, groups)
 
 			// Deduplicate
-			if !dedup.IsDuplicate(result) {
+			if !shouldSuppressMatch(result) && !dedup.IsDuplicate(result) {
 				dedup.Add(result)
 				matches = append(matches, result)
 			}
