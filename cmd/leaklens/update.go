@@ -210,8 +210,41 @@ func isDevelopmentVersion(current string) bool {
 	if current == "" || current == "source" || strings.HasPrefix(current, "commit ") {
 		return true
 	}
+	if isGoPseudoVersion(current) {
+		return true
+	}
+	return false
+}
+
+func isGoPseudoVersion(current string) bool {
 	parts := strings.Split(strings.TrimPrefix(current, "v"), "-")
-	return len(parts) >= 3 && len(parts[1]) == 14
+	if len(parts) < 3 {
+		return false
+	}
+
+	timestamp := parts[len(parts)-2]
+	if idx := strings.LastIndexByte(timestamp, '.'); idx >= 0 {
+		timestamp = timestamp[idx+1:]
+	}
+	if len(timestamp) != 14 {
+		return false
+	}
+	for _, r := range timestamp {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+
+	revision := parts[len(parts)-1]
+	if len(revision) < 12 {
+		return false
+	}
+	for _, r := range revision {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func compareReleaseVersions(current, latest string) (int, bool) {
