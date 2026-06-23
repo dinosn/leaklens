@@ -53,6 +53,9 @@ func TestCheckForUpdates_NoRelease(t *testing.T) {
 func TestClassifyUpdateStatus_DevelopmentBuild(t *testing.T) {
 	status := classifyUpdateStatus("v0.0.0-20260622183434-2448e48447c3", "v1.0.0", "")
 	assert.Equal(t, updateStateDevelopment, status.State)
+
+	status = classifyUpdateStatus("v0.1.1-0.20260623064508-b975a091e833", "v0.1.0", "")
+	assert.Equal(t, updateStateDevelopment, status.State)
 }
 
 func TestCompareReleaseVersions(t *testing.T) {
