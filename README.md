@@ -118,13 +118,13 @@ Check the installed build:
 leaklens version
 ```
 
-Check GitHub for the latest published release:
+Check GitHub for the latest `main` branch build:
 
 ```bash
 leaklens update
 ```
 
-LeakLens also performs a short release check when a command starts. The automatic notification is written to stderr so scan output stays parseable. It reports latest, outdated, development-build, or unknown status when a GitHub release exists. If no release has been published yet, normal scans stay quiet and `leaklens update` reports that state explicitly.
+LeakLens also performs a short `main` branch check when a command starts. The automatic notification is written to stderr so scan output stays parseable. This matches the documented `go install ...@main` install path and reports whether the installed binary is built from the latest `main` commit. If the current build cannot be mapped to a commit, normal scans stay quiet and `leaklens update` reports that state explicitly.
 
 Disable the automatic check for scripted runs:
 
