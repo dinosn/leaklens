@@ -16,6 +16,7 @@ var rootCmd = &cobra.Command{
 	Long: `LeakLens is a fast secrets scanner that finds credentials in code, files, git history, and web application assets.
 It uses regex-based detection rules to identify sensitive data like API keys, passwords, and tokens.`,
 	PersistentPreRun: notifyUpdateStatus,
+	SilenceUsage:     true,
 }
 
 func init() {
