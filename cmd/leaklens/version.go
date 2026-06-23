@@ -25,6 +25,17 @@ func runVersion(cmd *cobra.Command, args []string) error {
 }
 
 func resolvedVersion() string {
+	moduleVersion := currentVersionBase()
+
+	details := versionDetails(currentBuildSettings())
+	if len(details) == 0 {
+		return moduleVersion
+	}
+
+	return fmt.Sprintf("%s (%s)", moduleVersion, strings.Join(details, ", "))
+}
+
+func currentVersionBase() string {
 	buildVersion := strings.TrimSpace(version)
 	if buildVersion != "" && buildVersion != "dev" {
 		return buildVersion
@@ -37,15 +48,17 @@ func resolvedVersion() string {
 
 	moduleVersion := normalizeModuleVersion(info.Main.Version)
 	if moduleVersion == "" {
-		moduleVersion = "source"
+		return "source"
 	}
+	return moduleVersion
+}
 
-	details := versionDetails(info.Settings)
-	if len(details) == 0 {
-		return moduleVersion
+func currentBuildSettings() []debug.BuildSetting {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return nil
 	}
-
-	return fmt.Sprintf("%s (%s)", moduleVersion, strings.Join(details, ", "))
+	return info.Settings
 }
 
 func normalizeModuleVersion(value string) string {

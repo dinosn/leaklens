@@ -110,6 +110,29 @@ Fallback without native acceleration:
 CGO_ENABLED=0 go install github.com/dinosn/leaklens/cmd/leaklens@main
 ```
 
+## Version and Updates
+
+Check the installed build:
+
+```bash
+leaklens version
+```
+
+Check GitHub for the latest published release:
+
+```bash
+leaklens update
+```
+
+LeakLens also performs a short release check when a command starts. The automatic notification is written to stderr so scan output stays parseable. It reports latest, outdated, development-build, or unknown status when a GitHub release exists. If no release has been published yet, normal scans stay quiet and `leaklens update` reports that state explicitly.
+
+Disable the automatic check for scripted runs:
+
+```bash
+leaklens --no-update-check scan path/to/source
+LEAKLENS_NO_UPDATE_CHECK=true leaklens scan path/to/source
+```
+
 ## Quick Start
 
 ```bash
