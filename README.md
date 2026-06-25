@@ -182,6 +182,14 @@ This default profile enables:
 - `--crawl-extensions=js,json`
 - `--crawl-scope=rdn`
 
+To save crawled files as a readable website-style directory tree while scanning:
+
+```bash
+leaklens scan --crawl https://example.com/app/ --download-dir downloaded-site
+```
+
+Downloaded URL contents are saved under `downloaded-site/<host>/<path>`. Query strings are preserved in the filename, so `app.js` and `app.js?v=63` are stored separately.
+
 Use headless crawling only when the standard crawler misses browser-rendered assets:
 
 ```bash
@@ -271,6 +279,7 @@ Targets can be:
 | `--validate-workers` | `4` | Concurrent validation workers. |
 | `--workers` | CPU count | Parallel scan workers. |
 | `--store-blobs` | `false` | Store file contents under the datastore blob directory. |
+| `--download-dir` | | Write downloaded URL contents to a directory that preserves the website path structure. |
 | `--url-file` | | File containing URLs to scan, one per line. Use `-` for stdin. |
 | `--sqlite-row-limit` | `1000` | Max rows per SQLite table when extraction is enabled. Use `0` for unlimited. |
 

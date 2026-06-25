@@ -68,6 +68,7 @@ var (
 	scanValidate             bool
 	scanValidateWorkers      int
 	scanStoreBlobs           bool
+	scanDownloadDir          string
 	scanExtractArchivesFlag  extensionsValue
 	extractMaxSize           string
 	extractMaxTotal          string
@@ -126,6 +127,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanValidate, "validate", false, "validate detected secrets against their source APIs")
 	scanCmd.Flags().IntVar(&scanValidateWorkers, "validate-workers", 4, "number of concurrent validation workers")
 	scanCmd.Flags().BoolVar(&scanStoreBlobs, "store-blobs", false, "Store file contents in blobs/ directory")
+	scanCmd.Flags().StringVar(&scanDownloadDir, "download-dir", "", "Write downloaded URL contents to directory preserving website path structure")
 	scanCmd.Flags().Var(&scanExtractArchivesFlag, "extract", "Extract text from binary files (extensions: xlsx,docx,pdf,zip or 'all')")
 	scanCmd.Flags().StringVar(&extractMaxSize, "extract-max-size", "10MB", "Max uncompressed size per extracted file")
 	scanCmd.Flags().StringVar(&extractMaxTotal, "extract-max-total", "100MB", "Max total bytes to extract from one archive")
@@ -464,6 +466,15 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	// Initialize validation engine (nil if validation disabled)
 	validationEngine := initValidationEngine()
 
+	var mirror *downloadMirror
+	if scanDownloadDir != "" {
+		var err error
+		mirror, err = newDownloadMirror(scanDownloadDir)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Prepare inline output for human format
 	var outputMu sync.Mutex
 	inlineHuman := scanOutputFormat == "human" && !quiet
@@ -479,6 +490,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	var skippedCount atomic.Int64
 	var totalBytes atomic.Int64
 	var blobCount atomic.Int64
+	var downloadedCount atomic.Int64
 	var jsIntelArtifactCount atomic.Int64
 	startTime := time.Now()
 
@@ -631,6 +643,16 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 			}
 
 			for job := range jobs {
+				if mirror != nil {
+					wrote, err := mirror.Save(job.content, job.blobID, job.prov)
+					if err != nil {
+						return fmt.Errorf("saving downloaded file: %w", err)
+					}
+					if wrote {
+						downloadedCount.Add(1)
+					}
+				}
+
 				matches, err := m.MatchWithBlobID(job.content, job.blobID)
 				if err != nil {
 					if !quiet {
@@ -682,6 +704,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	duration := time.Since(startTime)
 	printScanStats(cmd, scanOutputFormat, scanOutputPath,
 		totalBytes.Load(), blobCount.Load(), matchCount.Load(), skippedCount.Load(), duration)
+	printDownloadStats(cmd, scanOutputFormat, mirror, downloadedCount.Load())
 
 	return outputScanResults(cmd, s, rules, ruleMap, jsIntelArtifactCount.Load())
 }
@@ -762,6 +785,17 @@ func printScanStats(cmd *cobra.Command, format, outputPath string, totalBytes, b
 		fmt.Fprint(cmd.OutOrStdout(), statsLine)
 		fmt.Fprintf(cmd.OutOrStdout(), "\n")
 	}
+}
+
+func printDownloadStats(cmd *cobra.Command, format string, mirror *downloadMirror, count int64) {
+	if quiet || mirror == nil {
+		return
+	}
+	out := cmd.OutOrStdout()
+	if format == "json" || format == "sarif" {
+		out = cmd.ErrOrStderr()
+	}
+	fmt.Fprintf(out, "Downloaded files stored in: %s (%d files)\n\n", mirror.root, count)
 }
 
 // outputScanResults routes scan output to the appropriate formatter based on scanOutputFormat.

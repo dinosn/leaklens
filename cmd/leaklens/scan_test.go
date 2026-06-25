@@ -34,6 +34,15 @@ func TestScanCommand_DefaultCrawlUsesStandardCrawler(t *testing.T) {
 		"default --crawl should use the standard crawler and avoid launching Chrome")
 }
 
+func TestScanCommand_DownloadDirFlagExists(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"scan"})
+	require.NoError(t, err)
+
+	flag := cmd.Flags().Lookup("download-dir")
+	require.NotNil(t, flag, "--download-dir flag should exist")
+	assert.Contains(t, flag.Usage, "preserving website path structure")
+}
+
 func TestCreateEnumerator_GitReturnsCombined(t *testing.T) {
 	// createEnumerator with useGit=true must return a *enum.CombinedEnumerator
 	// so that both git history and the working tree are scanned.

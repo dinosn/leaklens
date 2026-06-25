@@ -27,6 +27,20 @@ func (e oneBlobEnumerator) Enumerate(ctx context.Context, callback func(content 
 	return callback(e.content, types.ComputeBlobID(e.content), types.FileProvenance{FilePath: e.path})
 }
 
+type oneURLBlobEnumerator struct {
+	content []byte
+	rawURL  string
+}
+
+func (e oneURLBlobEnumerator) Enumerate(ctx context.Context, callback func(content []byte, blobID types.BlobID, prov types.Provenance) error) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return callback(e.content, types.ComputeBlobID(e.content), types.URLProvenance{URL: e.rawURL})
+}
+
 func writeRegressionRule(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rule.yml")
@@ -57,6 +71,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldValidate := scanValidate
 	oldValidateWorkers := scanValidateWorkers
 	oldStoreBlobs := scanStoreBlobs
+	oldDownloadDir := scanDownloadDir
 	oldWorkers := scanWorkers
 	oldExtractMaxSize := extractMaxSize
 	oldExtractMaxTotal := extractMaxTotal
@@ -85,6 +100,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanValidate = oldValidate
 		scanValidateWorkers = oldValidateWorkers
 		scanStoreBlobs = oldStoreBlobs
+		scanDownloadDir = oldDownloadDir
 		scanWorkers = oldWorkers
 		extractMaxSize = oldExtractMaxSize
 		extractMaxTotal = oldExtractMaxTotal
@@ -113,6 +129,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanValidate = false
 	scanValidateWorkers = 1
 	scanStoreBlobs = false
+	scanDownloadDir = ""
 	scanWorkers = 1
 	extractMaxSize = "10MB"
 	extractMaxTotal = "100MB"
@@ -168,6 +185,66 @@ func TestRunEnumeratorScan_StoreBlobsWritesContent(t *testing.T) {
 	}
 	if string(stored) != string(content) {
 		t.Fatalf("stored blob content mismatch: %q", string(stored))
+	}
+}
+
+func TestRunEnumeratorScan_DownloadDirMirrorsURLPath(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	outputPath := filepath.Join(t.TempDir(), "out.ds")
+	downloadDir := filepath.Join(t.TempDir(), "downloaded")
+	setScanGlobalsForRegression(t, rulePath, outputPath)
+	scanDownloadDir = downloadDir
+	quiet = true
+
+	content := []byte(`const token = "testsecret_ABC123";`)
+	cmd := &cobra.Command{}
+	err := runEnumeratorScan(cmd, oneURLBlobEnumerator{
+		content: content,
+		rawURL:  "https://static.example.test/app/Scripts/login.js?v=63",
+	})
+	if err != nil {
+		t.Fatalf("runEnumeratorScan failed: %v", err)
+	}
+
+	mirroredPath := filepath.Join(downloadDir, "static.example.test", "app", "Scripts", "login__query_v=63.js")
+	stored, err := os.ReadFile(mirroredPath)
+	if err != nil {
+		t.Fatalf("expected mirrored URL content at %s: %v", mirroredPath, err)
+	}
+	if string(stored) != string(content) {
+		t.Fatalf("mirrored URL content mismatch: %q", string(stored))
+	}
+}
+
+func TestMirroredURLPath(t *testing.T) {
+	tests := []struct {
+		rawURL string
+		want   string
+	}{
+		{
+			rawURL: "https://example.com/iPAS/Scripts/app.js",
+			want:   filepath.Join("example.com", "iPAS", "Scripts", "app.js"),
+		},
+		{
+			rawURL: "https://example.com/iPAS/ScriptResources/UserScriptResource_v2.js?v=63",
+			want:   filepath.Join("example.com", "iPAS", "ScriptResources", "UserScriptResource_v2__query_v=63.js"),
+		},
+		{
+			rawURL: "https://example.com/iPAS/",
+			want:   filepath.Join("example.com", "iPAS", "index"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.rawURL, func(t *testing.T) {
+			got, err := mirroredURLPath(tt.rawURL)
+			if err != nil {
+				t.Fatalf("mirroredURLPath failed: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("mirroredURLPath mismatch: got %q want %q", got, tt.want)
+			}
+		})
 	}
 }
 
