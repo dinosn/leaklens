@@ -2,14 +2,20 @@ package enum
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/projectdiscovery/katana/pkg/engine/hybrid"
 	"github.com/projectdiscovery/katana/pkg/engine/standard"
@@ -24,8 +30,8 @@ import (
 	"github.com/dinosn/leaklens/pkg/types"
 )
 
-// CrawlEnumerator uses katana to crawl a target URL and enumerate discovered
-// files for scanning. By default it filters for JavaScript files.
+// CrawlEnumerator crawls a target URL and enumerates discovered files for scanning.
+// By default it filters for JavaScript and JSON files.
 type CrawlEnumerator struct {
 	TargetURL          string
 	BaseURL            string
@@ -144,9 +150,10 @@ func urlMatchesExtensions(rawURL string, extensions []string) bool {
 // Enumerate crawls the target URL, collects discovered file URLs matching the
 // configured extensions, then downloads and passes each file to the callback.
 //
-// Katana is used only for URL discovery (spidering). The actual content download
-// is handled separately by URLEnumerator because katana may not fully fetch
-// every resource it discovers (e.g. due to crawl timeouts or parse failures).
+// The crawl engine is used for URL discovery. LeakLens also extracts first-page
+// HTML assets directly so Rails importmaps, modulepreload links, and Link header
+// preload targets are not missed when the crawl engine does not emit them.
+// Actual content download is handled separately by URLEnumerator.
 func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content []byte, blobID types.BlobID, prov types.Provenance) error) error {
 	var mu sync.Mutex
 	seen := make(map[string]struct{})
@@ -155,14 +162,40 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	var acceptingResults atomic.Bool
 	acceptingResults.Store(true)
 
+	addDiscoveredURL := func(rawURL string) {
+		if rawURL == "" {
+			return
+		}
+		if !e.urlInScope(rawURL) {
+			return
+		}
+		if !urlMatchesExtensions(rawURL, e.Extensions) {
+			return
+		}
+		candidates := e.urlCandidates(rawURL)
+		key := strings.Join(candidates, "\x00")
+		mu.Lock()
+		defer mu.Unlock()
+		if !acceptingResults.Load() {
+			return
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		discoveredURLs = append(discoveredURLs, rawURL)
+		discoveredCandidates = append(discoveredCandidates, candidates)
+		warnf("  found: %s\n", rawURL)
+	}
+
 	crawlRequestTimeout := 30
 	if e.Timeout > 0 && e.Timeout < time.Duration(crawlRequestTimeout)*time.Second {
 		crawlRequestTimeout = max(1, int(math.Ceil(e.Timeout.Seconds())))
 	}
 
-	// Do NOT set ExtensionsMatch here: katana uses it to filter which URLs to
-	// visit (not just which to report), so setting it to ["js"] would prevent
-	// katana from visiting HTML pages and it would never discover JS links.
+	// Do NOT set ExtensionsMatch here: the crawl engine uses it to filter which
+	// URLs to visit (not just which to report), so setting it to ["js"] would
+	// prevent HTML page visits and it would never discover JS links.
 	// Instead we filter by extension in the OnResult callback.
 	options := &katanatypes.Options{
 		MaxDepth:            e.MaxDepth,
@@ -198,22 +231,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			if rawURL == "" {
 				return
 			}
-			if !urlMatchesExtensions(rawURL, e.Extensions) {
-				return
-			}
-			candidates := e.urlCandidates(rawURL)
-			key := strings.Join(candidates, "\x00")
-			mu.Lock()
-			defer mu.Unlock()
-			if !acceptingResults.Load() {
-				return
-			}
-			if _, dup := seen[key]; !dup {
-				seen[key] = struct{}{}
-				discoveredURLs = append(discoveredURLs, rawURL)
-				discoveredCandidates = append(discoveredCandidates, candidates)
-				warnf("  found: %s\n", rawURL)
-			}
+			addDiscoveredURL(rawURL)
 		},
 	}
 
@@ -271,6 +289,15 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	warnf("Crawling %s (%s, depth=%d, extensions=%s)...\n",
 		e.TargetURL, mode, e.MaxDepth, strings.Join(e.Extensions, ","))
 
+	initialURLs, initialErr := e.discoverInitialAssetURLs(ctx)
+	if initialErr != nil {
+		warnf("warning: initial HTML asset discovery failed: %v\n", initialErr)
+	} else {
+		for _, rawURL := range initialURLs {
+			addDiscoveredURL(rawURL)
+		}
+	}
+
 	err, timedOut := e.runCrawlWithDeadline(ctx, engine, closeEngine)
 
 	mu.Lock()
@@ -306,6 +333,231 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 
 	urlEnum := NewURLEnumeratorWithCandidates(finalCandidates, e.MaxSize)
 	return urlEnum.Enumerate(ctx, callback)
+}
+
+func (e *CrawlEnumerator) discoverInitialAssetURLs(ctx context.Context) ([]string, error) {
+	timeout := 30 * time.Second
+	if e.Timeout > 0 && e.Timeout < timeout {
+		timeout = e.Timeout
+	}
+
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.TargetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return e.filterInScope(extractHeaderAssetURLs(resp.Request.URL, resp.Header, e.Extensions)), nil
+	}
+
+	reader := io.LimitReader(resp.Body, e.MaxSize+1)
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > e.MaxSize {
+		return e.filterInScope(extractHeaderAssetURLs(resp.Request.URL, resp.Header, e.Extensions)), nil
+	}
+
+	return e.filterInScope(extractHTMLAssetURLs(resp.Request.URL, resp.Header, body, e.Extensions)), nil
+}
+
+func (e *CrawlEnumerator) filterInScope(urls []string) []string {
+	out := make([]string, 0, len(urls))
+	for _, rawURL := range urls {
+		if e.urlInScope(rawURL) {
+			out = append(out, rawURL)
+		}
+	}
+	return out
+}
+
+func extractHTMLAssetURLs(base *url.URL, headers http.Header, body []byte, extensions []string) []string {
+	urls := extractHeaderAssetURLs(base, headers, extensions)
+
+	root, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return uniqueStrings(urls)
+	}
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch strings.ToLower(n.Data) {
+			case "script":
+				scriptType := strings.ToLower(strings.TrimSpace(nodeAttr(n, "type")))
+				if src := nodeAttr(n, "src"); src != "" {
+					addResolvedAssetURL(&urls, base, src, extensions)
+				}
+				if scriptType == "importmap" {
+					urls = append(urls, extractImportMapAssetURLs(base, nodeText(n), extensions)...)
+				}
+			case "link":
+				rel := nodeAttr(n, "rel")
+				as := nodeAttr(n, "as")
+				if shouldCollectLinkAsset(rel, as) {
+					if href := nodeAttr(n, "href"); href != "" {
+						addResolvedAssetURL(&urls, base, href, extensions)
+					}
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(root)
+
+	return uniqueStrings(urls)
+}
+
+func extractHeaderAssetURLs(base *url.URL, headers http.Header, extensions []string) []string {
+	var urls []string
+	for _, header := range headers.Values("Link") {
+		for _, part := range splitHTTPLinkHeader(header) {
+			start := strings.Index(part, "<")
+			end := strings.Index(part, ">")
+			if start < 0 || end <= start {
+				continue
+			}
+			addResolvedAssetURL(&urls, base, part[start+1:end], extensions)
+		}
+	}
+	return uniqueStrings(urls)
+}
+
+func extractImportMapAssetURLs(base *url.URL, data string, extensions []string) []string {
+	var parsed struct {
+		Imports map[string]string            `json:"imports"`
+		Scopes  map[string]map[string]string `json:"scopes"`
+	}
+	if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+		return nil
+	}
+
+	var urls []string
+	for _, value := range parsed.Imports {
+		addResolvedAssetURL(&urls, base, value, extensions)
+	}
+	for _, imports := range parsed.Scopes {
+		for _, value := range imports {
+			addResolvedAssetURL(&urls, base, value, extensions)
+		}
+	}
+	return uniqueStrings(urls)
+}
+
+func addResolvedAssetURL(out *[]string, base *url.URL, raw string, extensions []string) {
+	resolved, ok := resolveAssetURL(base, raw)
+	if !ok {
+		return
+	}
+	if !urlMatchesExtensions(resolved, extensions) {
+		return
+	}
+	*out = append(*out, resolved)
+}
+
+func resolveAssetURL(base *url.URL, raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "#") {
+		return "", false
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	if parsed.Scheme != "" && parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", false
+	}
+	if base != nil {
+		parsed = base.ResolveReference(parsed)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", false
+	}
+	parsed.Fragment = ""
+	return parsed.String(), true
+}
+
+func shouldCollectLinkAsset(rel, as string) bool {
+	relValues := strings.Fields(strings.ToLower(rel))
+	as = strings.ToLower(strings.TrimSpace(as))
+	for _, value := range relValues {
+		switch value {
+		case "modulepreload", "preload", "prefetch", "stylesheet":
+			return as == "" || as == "script" || as == "fetch" || as == "style"
+		}
+	}
+	return false
+}
+
+func nodeAttr(n *html.Node, key string) string {
+	for _, attr := range n.Attr {
+		if strings.EqualFold(attr.Key, key) {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.TextNode {
+			b.WriteString(node.Data)
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(n)
+	return b.String()
+}
+
+func splitHTTPLinkHeader(header string) []string {
+	var parts []string
+	start := 0
+	inQuote := false
+	for i, r := range header {
+		switch r {
+		case '"':
+			inQuote = !inQuote
+		case ',':
+			if !inQuote {
+				parts = append(parts, strings.TrimSpace(header[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(header[start:]))
+	return parts
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (e *CrawlEnumerator) runCrawlWithDeadline(ctx context.Context, engine interface {
@@ -392,6 +644,31 @@ func (e *CrawlEnumerator) urlCandidates(rawURL string) []string {
 	}
 
 	return candidates
+}
+
+func (e *CrawlEnumerator) urlInScope(rawURL string) bool {
+	targetParsed, err := url.Parse(e.TargetURL)
+	if err != nil {
+		return true
+	}
+	rawParsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+
+	switch strings.ToLower(e.Scope) {
+	case "rdn":
+		targetDomain, targetErr := publicsuffix.EffectiveTLDPlusOne(targetParsed.Hostname())
+		rawDomain, rawErr := publicsuffix.EffectiveTLDPlusOne(rawParsed.Hostname())
+		if targetErr == nil && rawErr == nil {
+			return strings.EqualFold(targetDomain, rawDomain)
+		}
+		return strings.EqualFold(targetParsed.Host, rawParsed.Host)
+	case "dn", "fqdn":
+		return strings.EqualFold(targetParsed.Host, rawParsed.Host)
+	default:
+		return sameURLAuthority(targetParsed, rawParsed)
+	}
 }
 
 func sameURLAuthority(a, b *url.URL) bool {

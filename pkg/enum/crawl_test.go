@@ -1,7 +1,12 @@
 package enum
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -69,5 +74,89 @@ func TestShouldUseHeadlessNoSandboxExplicitFlag(t *testing.T) {
 	got := shouldUseHeadlessNoSandboxForEUID(true, false, "ws://127.0.0.1:9222/devtools/browser/test", 1000)
 	if !got {
 		t.Fatal("expected explicit no-sandbox flag to be honored")
+	}
+}
+
+func TestCrawlInitialHTMLAssetDiscoveryFindsImportmapAndPreloadAssets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Add("Link", `</assets/from-link-header-c0ffee01.js>; rel=preload; as=script`)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<!doctype html>
+<html>
+  <head>
+    <script type="importmap">{
+      "imports": {
+        "application": "/assets/application-b3af3ba5.js",
+        "controllers/reports_controller": "/assets/controllers/reports_controller-e3257b8f.js",
+        "style": "/assets/application-347a7ab9.css"
+      },
+      "scopes": {
+        "/assets/": {
+          "scoped_controller": "/assets/controllers/scoped_controller-11111111.js"
+        }
+      }
+    }</script>
+    <link rel="modulepreload" href="/assets/controllers/account_completion_controller-93a905a6.js">
+    <link rel="preload" as="script" href="/assets/vendor/jquery.min-6c84fd2b.js">
+    <link rel="stylesheet" href="/assets/application-347a7ab9.css">
+    <script src="/assets/direct-script-22222222.js"></script>
+  </head>
+</html>`)
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL + "/app/",
+		Extensions: []string{"js", "json"},
+		Scope:      "fqdn",
+	})
+
+	got, err := enumerator.discoverInitialAssetURLs(context.Background())
+	if err != nil {
+		t.Fatalf("discoverInitialAssetURLs failed: %v", err)
+	}
+	sort.Strings(got)
+
+	want := []string{
+		server.URL + "/assets/application-b3af3ba5.js",
+		server.URL + "/assets/controllers/account_completion_controller-93a905a6.js",
+		server.URL + "/assets/controllers/reports_controller-e3257b8f.js",
+		server.URL + "/assets/controllers/scoped_controller-11111111.js",
+		server.URL + "/assets/direct-script-22222222.js",
+		server.URL + "/assets/from-link-header-c0ffee01.js",
+		server.URL + "/assets/vendor/jquery.min-6c84fd2b.js",
+	}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected initial asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestCrawlInitialHTMLAssetDiscoveryKeepsScopedURLsInScope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<script src="https://cdn.example.test/out-of-scope.js"></script><script src="/assets/in-scope.js"></script>`)
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL,
+		Extensions: []string{"js"},
+		Scope:      "fqdn",
+	})
+
+	got, err := enumerator.discoverInitialAssetURLs(context.Background())
+	if err != nil {
+		t.Fatalf("discoverInitialAssetURLs failed: %v", err)
+	}
+	for _, rawURL := range got {
+		if !enumerator.urlInScope(rawURL) {
+			t.Fatalf("initial asset discovery returned out-of-scope URL: %s", rawURL)
+		}
 	}
 }
