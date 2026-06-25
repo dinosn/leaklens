@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/dinosn/leaklens/pkg/enum"
@@ -41,6 +43,20 @@ func TestScanCommand_DownloadDirFlagExists(t *testing.T) {
 	flag := cmd.Flags().Lookup("download-dir")
 	require.NotNil(t, flag, "--download-dir flag should exist")
 	assert.Contains(t, flag.Usage, "preserving website path structure")
+}
+
+func TestScanCommand_HelpDoesNotMentionKatana(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"scan"})
+	require.NoError(t, err)
+
+	var b strings.Builder
+	cmd.SetOut(&b)
+	t.Cleanup(func() {
+		cmd.SetOut(os.Stdout)
+	})
+	require.NoError(t, cmd.Help())
+	assert.NotContains(t, b.String(), "Katana")
+	assert.NotContains(t, b.String(), "katana")
 }
 
 func TestCreateEnumerator_GitReturnsCombined(t *testing.T) {
