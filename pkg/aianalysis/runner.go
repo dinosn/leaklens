@@ -94,6 +94,9 @@ func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 				return Result{}, err
 			}
 			sections = append(sections, aiSection{Title: "Project Overview", Body: overview.Text})
+			if insights := extractLiveInsights(overview.Text); len(insights) > 0 {
+				progress.Emit("overview-insight", "AI insight from project overview", "", 0, 0, map[string]any{"insights": insights})
+			}
 		}
 	}
 
@@ -275,12 +278,26 @@ func reviewChunks(ctx context.Context, cfg Config, client Client, progress *prog
 	sections := make([]aiSection, len(chunks))
 	completed := make([]bool, len(chunks))
 	var failures []aiFailure
+	completedCount := 0
+	failedCount := 0
 	var mu sync.Mutex
 
-	recordFailure := func(failure aiFailure) {
+	markCompleted := func(index int) int {
+		mu.Lock()
+		completed[index] = true
+		completedCount++
+		processed := completedCount + failedCount
+		mu.Unlock()
+		return processed
+	}
+	recordFailure := func(failure aiFailure) (int, int) {
 		mu.Lock()
 		failures = append(failures, failure)
+		failedCount++
+		processed := completedCount + failedCount
+		failed := failedCount
 		mu.Unlock()
+		return processed, failed
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -296,34 +313,38 @@ func reviewChunks(ctx context.Context, cfg Config, client Client, progress *prog
 						return err
 					}
 					if ok {
-						progress.Emit("file-review", fmt.Sprintf("reusing AI corpus chunk %d/%d checkpoint", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "checkpoint": filepath.Base(checkpointPath)})
 						sections[i] = aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: text}
-						completed[i] = true
+						processed := markCompleted(i)
+						progress.Emit("file-review-done", fmt.Sprintf("reused AI corpus chunk %d from checkpoint", i+1), chunk.FileID, processed, len(chunks), map[string]any{"line_range": chunk.LineRange, "checkpoint": filepath.Base(checkpointPath), "chunk_index": i + 1, "progress_label": "processed"})
 						continue
 					}
 				}
-				progress.Emit("file-review", fmt.Sprintf("reviewing AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange})
 				resp, err := client.Complete(groupCtx, CompletionRequest{
 					SystemPrompt: systemPrompt,
 					UserPrompt:   buildChunkPrompt(cfg, chunk),
 				})
 				if err != nil {
-					recordFailure(aiFailure{Stage: "file-review", FileID: chunk.FileID, LineRange: chunk.LineRange, ChunkIndex: i + 1, Error: err.Error()})
-					progress.Emit("file-review-failed", fmt.Sprintf("AI corpus chunk %d/%d failed; continuing", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "error": err.Error()})
+					processed, failed := recordFailure(aiFailure{Stage: "file-review", FileID: chunk.FileID, LineRange: chunk.LineRange, ChunkIndex: i + 1, Error: err.Error()})
+					progress.Emit("file-review-failed", fmt.Sprintf("failed AI corpus chunk %d; %d failed total", i+1, failed), chunk.FileID, processed, len(chunks), map[string]any{"line_range": chunk.LineRange, "error": err.Error(), "chunk_index": i + 1, "failed_chunks": failed, "progress_label": "processed"})
 					continue
 				}
 				if err := writeCheckpoint(checkpointPath, resp.Text); err != nil {
 					return err
 				}
 				sections[i] = aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: resp.Text}
-				completed[i] = true
-				progress.Emit("file-review-done", fmt.Sprintf("completed AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange})
+				processed := markCompleted(i)
+				insights := extractLiveInsights(resp.Text)
+				if len(insights) > 0 {
+					progress.Emit("file-review-insight", fmt.Sprintf("AI insight from corpus chunk %d", i+1), chunk.FileID, 0, 0, map[string]any{"line_range": chunk.LineRange, "chunk_index": i + 1, "insights": insights})
+				}
+				progress.Emit("file-review-done", fmt.Sprintf("completed AI corpus chunk %d", i+1), chunk.FileID, processed, len(chunks), map[string]any{"line_range": chunk.LineRange, "chunk_index": i + 1, "progress_label": "processed"})
 			}
 			return nil
 		})
 	}
 
 	for i := range chunks {
+		chunk := chunks[i]
 		select {
 		case <-groupCtx.Done():
 			close(jobs)
@@ -332,6 +353,7 @@ func reviewChunks(ctx context.Context, cfg Config, client Client, progress *prog
 			}
 			return nil, nil, 0, groupCtx.Err()
 		case jobs <- i:
+			progress.Emit("file-review-start", fmt.Sprintf("started AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "chunk_index": i + 1, "suppress_human_progress": true})
 		}
 	}
 	close(jobs)
@@ -342,13 +364,13 @@ func reviewChunks(ctx context.Context, cfg Config, client Client, progress *prog
 	sort.SliceStable(failures, func(i, j int) bool {
 		return failures[i].ChunkIndex < failures[j].ChunkIndex
 	})
-	completedCount := 0
+	finalCompletedCount := 0
 	for _, ok := range completed {
 		if ok {
-			completedCount++
+			finalCompletedCount++
 		}
 	}
-	return sections, failures, completedCount, nil
+	return sections, failures, finalCompletedCount, nil
 }
 
 func chunkCheckpointName(index int, chunk aiChunk) string {
@@ -382,6 +404,62 @@ func countChunkFailures(failures []aiFailure) int {
 		}
 	}
 	return count
+}
+
+func extractLiveInsights(text string) []string {
+	const maxInsights = 3
+	var insights []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(text, "\n") {
+		candidate := cleanInsightLine(line)
+		if candidate == "" || seen[candidate] || !isSignificantInsight(candidate) {
+			continue
+		}
+		seen[candidate] = true
+		insights = append(insights, candidate)
+		if len(insights) == maxInsights {
+			return insights
+		}
+	}
+	return insights
+}
+
+func cleanInsightLine(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.Trim(line, "|")
+	line = strings.TrimSpace(line)
+	line = strings.TrimLeft(line, "-*•0123456789. ")
+	line = strings.Trim(line, "`")
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "```") {
+		return ""
+	}
+	if len(line) > 220 {
+		line = strings.TrimSpace(line[:220]) + "..."
+	}
+	return line
+}
+
+func isSignificantInsight(line string) bool {
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "none found") ||
+		strings.Contains(lower, "no findings") ||
+		strings.Contains(lower, "no secret") ||
+		strings.Contains(lower, "no obvious") ||
+		strings.Contains(lower, "not enough evidence") ||
+		strings.Contains(lower, "not observed") {
+		return false
+	}
+	keywords := []string{
+		"api key", "secret", "token", "credential", "password", "authorization", "auth", "unauth",
+		"cors", "debug", "misconfig", "vulnerab", "exposed", "leak", "admin", "risk", "critical", "high confidence",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildManifest(now time.Time, cfg Config, files []preparedFile, chunks []aiChunk) Manifest {
@@ -455,15 +533,62 @@ func (p *progressWriter) Emit(stage, message, fileID string, index, total int, e
 		Extra:   extra,
 	}
 	if p.human != nil {
-		if total > 0 && index > 0 {
-			fmt.Fprintf(p.human, "AI: %s (%d/%d)\n", message, index, total)
+		if total > 0 && index > 0 && !extraBool(extra, "suppress_human_progress") {
+			label := extraString(extra, "progress_label")
+			if label != "" {
+				fmt.Fprintf(p.human, "AI: %s (%d/%d %s)\n", message, index, total, label)
+			} else {
+				fmt.Fprintf(p.human, "AI: %s (%d/%d)\n", message, index, total)
+			}
 		} else {
 			fmt.Fprintf(p.human, "AI: %s\n", message)
+		}
+		for _, insight := range extraStringSlice(extra, "insights") {
+			fmt.Fprintf(p.human, "AI insight: %s\n", insight)
 		}
 	}
 	if p.ndjson != nil {
 		data, _ := json.Marshal(event)
 		_, _ = p.ndjson.Write(append(data, '\n'))
+	}
+}
+
+func extraBool(extra map[string]any, key string) bool {
+	if extra == nil {
+		return false
+	}
+	value, ok := extra[key].(bool)
+	return ok && value
+}
+
+func extraString(extra map[string]any, key string) string {
+	if extra == nil {
+		return ""
+	}
+	value, ok := extra[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func extraStringSlice(extra map[string]any, key string) []string {
+	if extra == nil {
+		return nil
+	}
+	switch value := extra[key].(type) {
+	case []string:
+		return value
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
