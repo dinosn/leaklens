@@ -18,6 +18,34 @@ func TestRedactorAlwaysRedactsTargetURLInExpandedMode(t *testing.T) {
 	}
 }
 
+func TestRedactorExpandedPreservesEndpointPathForManualCurl(t *testing.T) {
+	redactor := NewRedactor(CloudRedactionExpanded, []string{"https://lookback-staging.example.test/"})
+
+	got := redactor.RedactContent(`
+fetch("https://lookback-staging.example.test/api/files/upload", {method: "POST"});
+fetch("https://lookback-staging.example.test/api/files/download?file_id=12345");
+`)
+
+	for _, forbidden := range []string{
+		"lookback-staging.example.test",
+		"REDACTED_UPLOAD_ENDPOINT",
+		"REDACTED_DOWNLOAD_ENDPOINT",
+		"REDACTED_ENDPOINT",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("expanded redaction should not contain %q: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"TARGET_ORIGIN_1/api/files/upload",
+		"TARGET_ORIGIN_1/api/files/download?file_id=12345",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expanded redaction should preserve %q, got: %s", want, got)
+		}
+	}
+}
+
 func TestRedactorStandardRedactsHighEntropyButExpandedKeepsIt(t *testing.T) {
 	input := `const publicConfig = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdef";`
 

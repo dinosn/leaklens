@@ -393,7 +393,7 @@ Cloud redaction behavior:
 
 `--ai-cloud-redaction standard` redacts obvious credentials, authorization headers, cookie values, secret-bearing query values, and generic high-entropy strings before provider submission. It keeps variable names, function names, endpoint paths, HTTP methods, and structural context.
 
-`--ai-cloud-redaction expanded` still redacts target URLs, hostnames, local paths, authorization headers, cookie values, and obvious credential assignments, but preserves more non-URL JavaScript context. Use this mode when deeper AI reasoning over config and string literals is needed. It does not disable target URL redaction.
+`--ai-cloud-redaction expanded` still redacts target origins, hostnames, local filesystem paths, authorization headers, cookie values, and obvious credential assignments, but preserves URL endpoint paths and more non-URL JavaScript context. For example, `https://www.example.com/api/files/upload` is sent and reported as `TARGET_ORIGIN_1/api/files/upload`, not as a generic redacted upload endpoint. Use this mode when deeper AI reasoning over config and string literals is needed. It does not disable target origin or hostname redaction.
 
 LeakLens does not execute AI-generated curl commands. The report contains validation plans only. Active testing may be added later behind a separate explicit option.
 
