@@ -341,7 +341,7 @@ func (e *CrawlEnumerator) discoverInitialAssetURLs(ctx context.Context) ([]strin
 		timeout = e.Timeout
 	}
 
-	client := &http.Client{Timeout: timeout}
+	client := newTLSFallbackHTTPClient(timeout)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.TargetURL, nil)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 package enum
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -50,5 +51,36 @@ func TestURLEnumerator_MixedFailureAndSuccessReturnsContent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 successful URL callback, got %d", count)
+	}
+}
+
+func TestURLEnumerator_RetriesCertificateVerificationFailure(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("const token = 'testsecret_TLS123';"))
+	}))
+	defer server.Close()
+
+	var logs bytes.Buffer
+	restore := SetLogOutput(&logs)
+	defer restore()
+
+	enumerator := NewURLEnumerator([]string{server.URL + "/app.js"}, 1024)
+	var count int
+	err := enumerator.Enumerate(context.Background(), func(content []byte, blobID types.BlobID, prov types.Provenance) error {
+		count++
+		if string(content) != "const token = 'testsecret_TLS123';" {
+			t.Fatalf("unexpected content: %q", string(content))
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("expected TLS fallback URL scan to succeed, got %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 successful URL callback, got %d", count)
+	}
+	if !strings.Contains(logs.String(), "TLS certificate verification failed") {
+		t.Fatalf("expected TLS verification warning, got logs: %s", logs.String())
 	}
 }
