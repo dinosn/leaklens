@@ -52,9 +52,7 @@ func NewURLEnumeratorWithCandidates(candidates [][]string, maxSize int64) *URLEn
 		URLs:          urls,
 		URLCandidates: normalized,
 		MaxSize:       maxSize,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient:    newTLSFallbackHTTPClient(30 * time.Second),
 	}
 }
 

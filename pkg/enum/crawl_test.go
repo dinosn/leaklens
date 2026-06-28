@@ -1,12 +1,14 @@
 package enum
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -158,5 +160,36 @@ func TestCrawlInitialHTMLAssetDiscoveryKeepsScopedURLsInScope(t *testing.T) {
 		if !enumerator.urlInScope(rawURL) {
 			t.Fatalf("initial asset discovery returned out-of-scope URL: %s", rawURL)
 		}
+	}
+}
+
+func TestCrawlInitialHTMLAssetDiscoveryRetriesCertificateVerificationFailure(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<script src="/assets/app.js"></script>`)
+	}))
+	defer server.Close()
+
+	var logs bytes.Buffer
+	restore := SetLogOutput(&logs)
+	defer restore()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL,
+		Extensions: []string{"js"},
+		Scope:      "fqdn",
+	})
+
+	got, err := enumerator.discoverInitialAssetURLs(context.Background())
+	if err != nil {
+		t.Fatalf("discoverInitialAssetURLs failed: %v", err)
+	}
+
+	want := []string{server.URL + "/assets/app.js"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected initial asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+	if !strings.Contains(logs.String(), "TLS certificate verification failed") {
+		t.Fatalf("expected TLS verification warning, got logs: %s", logs.String())
 	}
 }
