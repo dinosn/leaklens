@@ -1,6 +1,7 @@
 package aianalysis
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -224,7 +225,7 @@ func (c *parallelCheckingClient) Complete(ctx context.Context, req CompletionReq
 	}
 
 	c.finish()
-	return CompletionResponse{Text: "parallel chunk review"}, nil
+	return CompletionResponse{Text: "High confidence token exposure: client-side JavaScript references an authorization token path."}, nil
 }
 
 func (c *parallelCheckingClient) finish() {
@@ -236,6 +237,7 @@ func (c *parallelCheckingClient) finish() {
 func TestRunReviewsChunksInParallel(t *testing.T) {
 	client := newParallelCheckingClient()
 	reportDir := t.TempDir()
+	var progress bytes.Buffer
 	cfg := Config{
 		Provider:           "openai",
 		Model:              "test-model",
@@ -246,6 +248,7 @@ func TestRunReviewsChunksInParallel(t *testing.T) {
 		Client:             client,
 		ChunkChars:         20,
 		Concurrency:        2,
+		Progress:           &progress,
 	}
 	files := []CorpusFile{
 		{ID: "FILE_001", Path: "one.js", Kind: "file", BlobID: "one", Size: 16, Content: []byte("const one = 1;\n")},
@@ -268,5 +271,18 @@ func TestRunReviewsChunksInParallel(t *testing.T) {
 	client.mu.Unlock()
 	if maxInFlight < 2 {
 		t.Fatalf("expected parallel chunk review, max in-flight was %d", maxInFlight)
+	}
+	progressText := progress.String()
+	if strings.Contains(progressText, "started AI corpus chunk 1/3 (1/3)") {
+		t.Fatalf("start progress should not duplicate chunk index as progress count:\n%s", progressText)
+	}
+	if !strings.Contains(progressText, "started AI corpus chunk 1/3") || !strings.Contains(progressText, "started AI corpus chunk 2/3") {
+		t.Fatalf("expected explicit chunk start lines:\n%s", progressText)
+	}
+	if !strings.Contains(progressText, "processed)") {
+		t.Fatalf("expected completion lines to show processed-count progress:\n%s", progressText)
+	}
+	if !strings.Contains(progressText, "AI insight: High confidence token exposure") {
+		t.Fatalf("expected live AI insight preview:\n%s", progressText)
 	}
 }

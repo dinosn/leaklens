@@ -19,6 +19,7 @@ Required output:
 - every reviewed file and relevant function/variable behavior
 - secret candidates with file, line, variable/function context, and confidence
 - possible auth, authorization, CORS, debug, storage, endpoint, and client-trust issues
+- put high-priority findings near the top of each chunk response so they can be surfaced while the run is still active
 - curl commands for owner validation, using TARGET_ORIGIN_N placeholders exactly as supplied
 - remediation notes and validation caveats
 `, cfg.Mode))

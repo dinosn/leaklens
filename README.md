@@ -381,6 +381,7 @@ AI provider resilience:
 - A failed overview or file chunk no longer aborts the whole scan after the local corpus is built. LeakLens writes a partial Markdown report, records failed stages in `AI Failures`, and preserves successful responses in `ai-chunks/`.
 - To continue a long run, rerun the same scan with the same `--ai-report-dir --ai-resume`. Completed checkpoints are reused and only missing chunks are sent to the provider.
 - File chunks are reviewed in parallel according to `LEAKLENS_AI_CONCURRENCY`. Set it to `1` for serial provider calls or lower it if the provider rate-limits the run.
+- With `--ai-progress=text`, high-signal AI observations from completed overview and chunk responses are printed immediately as `AI insight:` lines while the full report is still being built.
 - Use `LEAKLENS_AI_TIMEOUT` for slow provider responses and `LEAKLENS_AI_CHUNK_CHARS` to reduce request size for models or networks that time out on large chunks. The default chunk size is `60000` characters, matching the original AI chunking behavior.
 
 Cloud redaction behavior:
