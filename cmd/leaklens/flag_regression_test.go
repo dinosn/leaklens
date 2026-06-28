@@ -86,6 +86,13 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldJSIntelSourceMaps := scanJSIntelSourceMaps
 	oldJSIntelGeneric := scanJSIntelGeneric
 	oldJSIntelNPMCheck := scanJSIntelNPMCheck
+	oldAI := scanAI
+	oldAIMode := scanAIMode
+	oldAIReportDir := scanAIReportDir
+	oldAICloudRedaction := scanAICloudRedaction
+	oldAIProgress := scanAIProgress
+	oldAIResolvedReportDir := scanAIResolvedReportDir
+	oldAITargetHints := append([]string(nil), scanAITargetHints...)
 
 	t.Cleanup(func() {
 		quiet = oldQuiet
@@ -115,6 +122,13 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanJSIntelSourceMaps = oldJSIntelSourceMaps
 		scanJSIntelGeneric = oldJSIntelGeneric
 		scanJSIntelNPMCheck = oldJSIntelNPMCheck
+		scanAI = oldAI
+		scanAIMode = oldAIMode
+		scanAIReportDir = oldAIReportDir
+		scanAICloudRedaction = oldAICloudRedaction
+		scanAIProgress = oldAIProgress
+		scanAIResolvedReportDir = oldAIResolvedReportDir
+		scanAITargetHints = oldAITargetHints
 	})
 
 	quiet = false
@@ -144,6 +158,13 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanJSIntelSourceMaps = true
 	scanJSIntelGeneric = false
 	scanJSIntelNPMCheck = false
+	scanAI = false
+	scanAIMode = "all"
+	scanAIReportDir = ""
+	scanAICloudRedaction = "standard"
+	scanAIProgress = "text"
+	scanAIResolvedReportDir = ""
+	scanAITargetHints = nil
 }
 
 func runRegressionScan(t *testing.T, outputPath string) bytes.Buffer {
@@ -317,6 +338,52 @@ func TestValidateScanOptionsRejectsInvalidValues(t *testing.T) {
 	extractMaxSize = "-1"
 	if err := validateScanOptions(); err == nil || !strings.Contains(err.Error(), "extract-max-size") {
 		t.Fatalf("expected negative extract-max-size error, got %v", err)
+	}
+}
+
+func TestValidateScanOptionsRequiresAIEnvOnlyConfiguration(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+	scanAI = true
+
+	t.Setenv("LEAKLENS_AI_PROVIDER", "")
+	t.Setenv("LEAKLENS_AI_MODEL", "")
+	t.Setenv("LEAKLENS_OPENAI_API_KEY", "")
+	if err := validateScanOptions(); err == nil || !strings.Contains(err.Error(), "LEAKLENS_AI_PROVIDER") {
+		t.Fatalf("expected provider env error, got %v", err)
+	}
+
+	t.Setenv("LEAKLENS_AI_PROVIDER", "openai")
+	t.Setenv("LEAKLENS_AI_MODEL", "test-model")
+	if err := validateScanOptions(); err == nil || !strings.Contains(err.Error(), "LEAKLENS_OPENAI_API_KEY") {
+		t.Fatalf("expected openai key env error, got %v", err)
+	}
+
+	t.Setenv("LEAKLENS_OPENAI_API_KEY", "test-key")
+	if err := validateScanOptions(); err != nil {
+		t.Fatalf("expected AI env validation to pass, got %v", err)
+	}
+}
+
+func TestPrepareAIOutputAutoSetsDownloadDirForURLScans(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+	scanAI = true
+	scanAIReportDir = filepath.Join(t.TempDir(), "ai-report")
+
+	if err := prepareAIOutput("https://www.example.test/app/", true, []string{"https://www.example.test/app/"}); err != nil {
+		t.Fatalf("prepareAIOutput failed: %v", err)
+	}
+
+	if scanAIResolvedReportDir != scanAIReportDir {
+		t.Fatalf("unexpected report dir: got %q want %q", scanAIResolvedReportDir, scanAIReportDir)
+	}
+	wantDownloadDir := filepath.Join(scanAIReportDir, "downloaded")
+	if scanDownloadDir != wantDownloadDir {
+		t.Fatalf("unexpected download dir: got %q want %q", scanDownloadDir, wantDownloadDir)
+	}
+	if len(scanAITargetHints) != 1 || scanAITargetHints[0] != "https://www.example.test/app/" {
+		t.Fatalf("unexpected target hints: %#v", scanAITargetHints)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dinosn/leaklens/pkg/aianalysis"
 	"github.com/dinosn/leaklens/pkg/datastore"
 	"github.com/dinosn/leaklens/pkg/enum"
 	"github.com/dinosn/leaklens/pkg/jsintel"
@@ -100,6 +103,13 @@ var (
 	scanJSIntelSourceMaps    bool
 	scanJSIntelGeneric       bool
 	scanJSIntelNPMCheck      bool
+	scanAI                   bool
+	scanAIMode               string
+	scanAIReportDir          string
+	scanAICloudRedaction     string
+	scanAIProgress           string
+	scanAIResolvedReportDir  string
+	scanAITargetHints        []string
 )
 
 var scanCmd = &cobra.Command{
@@ -161,6 +171,12 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanJSIntelSourceMaps, "js-intel-source-maps", true, "When --js-intel is enabled, parse inline source maps and scan embedded sources")
 	scanCmd.Flags().BoolVar(&scanJSIntelGeneric, "js-intel-generic-secrets", false, "Enable low-confidence JS-style generic secret heuristics")
 	scanCmd.Flags().BoolVar(&scanJSIntelNPMCheck, "js-intel-npm-check", false, "Actively check discovered npm packages for public-registry misses")
+
+	scanCmd.Flags().BoolVar(&scanAI, "ai", false, "Run AI-assisted JS/JSON analysis after scanning")
+	scanCmd.Flags().StringVar(&scanAIMode, "ai-mode", "all", "AI analysis mode: secrets, appsec, or all")
+	scanCmd.Flags().StringVar(&scanAIReportDir, "ai-report-dir", "", "Directory for AI Markdown, manifest, progress, and redaction artifacts")
+	scanCmd.Flags().StringVar(&scanAICloudRedaction, "ai-cloud-redaction", "standard", "Cloud redaction mode: standard or expanded; target URLs and hosts are always redacted")
+	scanCmd.Flags().StringVar(&scanAIProgress, "ai-progress", "text", "AI progress output: text or quiet")
 }
 
 // blobJob represents a unit of work for the worker pool.
@@ -171,6 +187,9 @@ type blobJob struct {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
+	scanAIResolvedReportDir = ""
+	scanAITargetHints = nil
+
 	if err := validateScanOptions(); err != nil {
 		return err
 	}
@@ -230,6 +249,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// Validate target exists (filesystem path)
 	if _, err := os.Stat(target); err != nil {
 		return fmt.Errorf("target does not exist: %s", target)
+	}
+	if scanAI {
+		if err := prepareAIOutput(target, false, []string{target}); err != nil {
+			return err
+		}
 	}
 
 	// Create enumerator
@@ -296,6 +320,11 @@ func runURLScan(cmd *cobra.Command, urls []string) error {
 	if !cmd.Flags().Changed("output") {
 		scanOutputPath = ":memory:"
 	}
+	if scanAI {
+		if err := prepareAIOutput(urls[0], true, urls); err != nil {
+			return err
+		}
+	}
 
 	enumerator := enum.NewURLEnumerator(urls, scanMaxFileSize)
 	return runEnumeratorScan(cmd, enumerator)
@@ -304,6 +333,11 @@ func runURLScan(cmd *cobra.Command, urls []string) error {
 func runCrawlScan(cmd *cobra.Command, targetURL string) error {
 	if !cmd.Flags().Changed("output") {
 		scanOutputPath = ":memory:"
+	}
+	if scanAI {
+		if err := prepareAIOutput(targetURL, true, []string{targetURL}); err != nil {
+			return err
+		}
 	}
 
 	var timeout time.Duration
@@ -401,7 +435,116 @@ func validateScanOptions() error {
 	if scanCrawlMaxDomainPages < 0 {
 		return fmt.Errorf("--crawl-max-domain-pages must be >= 0")
 	}
+	if scanAI {
+		if err := validateAIOptions(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateAIOptions() error {
+	switch aianalysis.Mode(scanAIMode) {
+	case aianalysis.ModeSecrets, aianalysis.ModeAppSec, aianalysis.ModeAll:
+	default:
+		return fmt.Errorf("unknown --ai-mode: %s", scanAIMode)
+	}
+	switch aianalysis.CloudRedactionMode(scanAICloudRedaction) {
+	case aianalysis.CloudRedactionStandard, aianalysis.CloudRedactionExpanded:
+	default:
+		return fmt.Errorf("unknown --ai-cloud-redaction: %s", scanAICloudRedaction)
+	}
+	switch scanAIProgress {
+	case "text", "quiet":
+	default:
+		return fmt.Errorf("unknown --ai-progress: %s", scanAIProgress)
+	}
+	if strings.TrimSpace(os.Getenv("LEAKLENS_AI_PROVIDER")) == "" {
+		return fmt.Errorf("LEAKLENS_AI_PROVIDER is required when --ai is enabled")
+	}
+	if strings.TrimSpace(os.Getenv("LEAKLENS_AI_MODEL")) == "" {
+		return fmt.Errorf("LEAKLENS_AI_MODEL is required when --ai is enabled")
+	}
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LEAKLENS_AI_PROVIDER")))
+	switch provider {
+	case "openai":
+		if strings.TrimSpace(os.Getenv("LEAKLENS_OPENAI_API_KEY")) == "" {
+			return fmt.Errorf("LEAKLENS_OPENAI_API_KEY is required when LEAKLENS_AI_PROVIDER=openai")
+		}
+	case "anthropic":
+		if strings.TrimSpace(os.Getenv("LEAKLENS_ANTHROPIC_API_KEY")) == "" {
+			return fmt.Errorf("LEAKLENS_ANTHROPIC_API_KEY is required when LEAKLENS_AI_PROVIDER=anthropic")
+		}
+	default:
+		return fmt.Errorf("unsupported LEAKLENS_AI_PROVIDER: %s", provider)
+	}
+	return nil
+}
+
+func prepareAIOutput(targetLabel string, mirrorDownloads bool, targetHints []string) error {
+	if scanAIResolvedReportDir == "" {
+		if scanAIReportDir != "" {
+			scanAIResolvedReportDir = scanAIReportDir
+		} else {
+			scanAIResolvedReportDir = filepath.Join("leaklens-ai", safeAIRunLabel(targetLabel)+"-"+time.Now().Format("20060102-150405"))
+		}
+	}
+	scanAITargetHints = append([]string(nil), targetHints...)
+	if mirrorDownloads && scanDownloadDir == "" {
+		scanDownloadDir = filepath.Join(scanAIResolvedReportDir, "downloaded")
+	}
+	return nil
+}
+
+func safeAIRunLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if parsed, err := url.Parse(value); err == nil && parsed.Hostname() != "" {
+		value = parsed.Hostname()
+	} else {
+		value = filepath.Base(value)
+	}
+	value = sanitizeMirrorSegment(value)
+	if value == "" || value == "_" {
+		return "scan"
+	}
+	return value
+}
+
+func runAIAnalysis(ctx context.Context, cmd *cobra.Command, files []aianalysis.CorpusFile) (aianalysis.Result, error) {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LEAKLENS_AI_PROVIDER")))
+	apiKey := ""
+	switch provider {
+	case "openai":
+		apiKey = os.Getenv("LEAKLENS_OPENAI_API_KEY")
+	case "anthropic":
+		apiKey = os.Getenv("LEAKLENS_ANTHROPIC_API_KEY")
+	}
+	var progress io.Writer
+	if !quiet && scanAIProgress == "text" {
+		progress = cmd.ErrOrStderr()
+	}
+	cfg := aianalysis.Config{
+		Provider:           provider,
+		Model:              os.Getenv("LEAKLENS_AI_MODEL"),
+		APIKey:             apiKey,
+		Mode:               aianalysis.Mode(scanAIMode),
+		CloudRedactionMode: aianalysis.CloudRedactionMode(scanAICloudRedaction),
+		ReportDir:          scanAIResolvedReportDir,
+		TargetHints:        scanAITargetHints,
+		Progress:           progress,
+	}
+	return aianalysis.Run(ctx, cfg, files)
+}
+
+func printAIStats(cmd *cobra.Command, format string, result aianalysis.Result) {
+	if quiet {
+		return
+	}
+	out := cmd.OutOrStdout()
+	if format == "json" || format == "sarif" {
+		out = cmd.ErrOrStderr()
+	}
+	fmt.Fprintf(out, "AI analysis report: %s (%d files, %d chunks)\n\n", result.ReportPath, result.FileCount, result.ChunkCount)
 }
 
 func splitCommaList(value string) []string {
@@ -493,6 +636,8 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	var downloadedCount atomic.Int64
 	var jsIntelArtifactCount atomic.Int64
 	startTime := time.Now()
+	var aiMu sync.Mutex
+	var aiFiles []aianalysis.CorpusFile
 
 	var jsAnalyzer *jsintel.Analyzer
 	if scanJSIntel {
@@ -517,6 +662,18 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 		enqueue := func(content []byte, blobID types.BlobID, prov types.Provenance) error {
 			totalBytes.Add(int64(len(content)))
 			blobCount.Add(1)
+			if scanAI && aianalysis.ShouldIncludePath(prov.Path()) {
+				aiMu.Lock()
+				aiFiles = append(aiFiles, aianalysis.CorpusFile{
+					ID:      fmt.Sprintf("FILE_%03d", len(aiFiles)+1),
+					Path:    prov.Path(),
+					Kind:    prov.Kind(),
+					BlobID:  blobID.Hex(),
+					Size:    len(content),
+					Content: append([]byte(nil), content...),
+				})
+				aiMu.Unlock()
+			}
 
 			// Check for incremental scanning
 			if scanIncremental {
@@ -705,6 +862,16 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	printScanStats(cmd, scanOutputFormat, scanOutputPath,
 		totalBytes.Load(), blobCount.Load(), matchCount.Load(), skippedCount.Load(), duration)
 	printDownloadStats(cmd, scanOutputFormat, mirror, downloadedCount.Load())
+	if scanAI {
+		aiMu.Lock()
+		files := append([]aianalysis.CorpusFile(nil), aiFiles...)
+		aiMu.Unlock()
+		result, err := runAIAnalysis(ctx, cmd, files)
+		if err != nil {
+			return fmt.Errorf("ai analysis: %w", err)
+		}
+		printAIStats(cmd, scanOutputFormat, result)
+	}
 
 	return outputScanResults(cmd, s, rules, ruleMap, jsIntelArtifactCount.Load())
 }
@@ -1021,6 +1188,11 @@ func runRepoScan(cmd *cobra.Command, rt repoTarget) error {
 		Name:     rt.FullPath,
 		CloneURL: cloneURL,
 	}}
+	if scanAI {
+		if err := prepareAIOutput(rt.FullPath, false, []string{rt.FullPath}); err != nil {
+			return err
+		}
+	}
 
 	cloneEnum := enum.NewCloneEnumerator(repos, enum.Config{
 		MaxFileSize: scanMaxFileSize,
