@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-const maxCloudPromptChars = 60000
-
 func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 	if err := validateConfig(cfg); err != nil {
 		return Result{}, err
@@ -37,7 +35,7 @@ func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 	progress.Emit("corpus", fmt.Sprintf("building AI corpus: %d candidate file(s)", len(files)), "", 0, len(files), nil)
 	redactor := NewRedactor(cfg.CloudRedactionMode, cfg.TargetHints)
 	prepared := prepareFiles(redactor, files)
-	chunks := buildChunks(prepared)
+	chunks := buildChunks(prepared, normalizedChunkChars(cfg.ChunkChars))
 	manifest := buildManifest(now(), cfg, prepared, chunks)
 
 	manifestPath := filepath.Join(cfg.ReportDir, "corpus-manifest.json")
@@ -47,6 +45,10 @@ func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 	redactionMapPath := filepath.Join(cfg.ReportDir, "ai-redaction-map.json")
 	if err := writeJSON(redactionMapPath, redactor.Snapshot()); err != nil {
 		return Result{}, err
+	}
+	chunkDir := filepath.Join(cfg.ReportDir, "ai-chunks")
+	if err := os.MkdirAll(chunkDir, 0755); err != nil {
+		return Result{}, fmt.Errorf("creating AI chunk checkpoint directory: %w", err)
 	}
 
 	reportPath := filepath.Join(cfg.ReportDir, "leaklens-ai-report.md")
@@ -65,31 +67,75 @@ func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 
 	systemPrompt := buildSystemPrompt(cfg)
 	var sections []aiSection
-	progress.Emit("overview", "requesting project-level AI overview", "", 0, 0, map[string]any{"chunks": len(chunks)})
-	overviewPrompt := buildOverviewPrompt(cfg, prepared)
-	overview, err := client.Complete(ctx, CompletionRequest{SystemPrompt: systemPrompt, UserPrompt: overviewPrompt})
-	if err != nil {
-		return Result{}, fmt.Errorf("AI project overview failed: %w", err)
+	var failures []aiFailure
+	overviewCheckpoint := filepath.Join(chunkDir, "overview.md")
+	if cfg.Resume {
+		overviewText, ok, err := readCheckpoint(overviewCheckpoint)
+		if err != nil {
+			return Result{}, err
+		}
+		if ok {
+			progress.Emit("overview", "reusing project-level AI overview checkpoint", "", 0, 0, map[string]any{"checkpoint": filepath.Base(overviewCheckpoint)})
+			sections = append(sections, aiSection{Title: "Project Overview", Body: overviewText})
+		}
 	}
-	sections = append(sections, aiSection{Title: "Project Overview", Body: overview.Text})
+	if len(sections) == 0 {
+		progress.Emit("overview", "requesting project-level AI overview", "", 0, 0, map[string]any{"chunks": len(chunks)})
+		overviewPrompt := buildOverviewPrompt(cfg, prepared)
+		overview, err := client.Complete(ctx, CompletionRequest{SystemPrompt: systemPrompt, UserPrompt: overviewPrompt})
+		if err != nil {
+			failures = append(failures, aiFailure{Stage: "overview", Error: err.Error()})
+			progress.Emit("overview-failed", "project-level AI overview failed; continuing with file chunks", "", 0, 0, map[string]any{"error": err.Error()})
+		} else {
+			if err := writeCheckpoint(overviewCheckpoint, overview.Text); err != nil {
+				return Result{}, err
+			}
+			sections = append(sections, aiSection{Title: "Project Overview", Body: overview.Text})
+		}
+	}
 
+	completedChunks := 0
 	for i, chunk := range chunks {
+		checkpointPath := filepath.Join(chunkDir, chunkCheckpointName(i, chunk))
+		if cfg.Resume {
+			text, ok, err := readCheckpoint(checkpointPath)
+			if err != nil {
+				return Result{}, err
+			}
+			if ok {
+				progress.Emit("file-review", fmt.Sprintf("reusing AI corpus chunk %d/%d checkpoint", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "checkpoint": filepath.Base(checkpointPath)})
+				sections = append(sections, aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: text})
+				completedChunks++
+				continue
+			}
+		}
 		progress.Emit("file-review", fmt.Sprintf("reviewing AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange})
 		resp, err := client.Complete(ctx, CompletionRequest{
 			SystemPrompt: systemPrompt,
 			UserPrompt:   buildChunkPrompt(cfg, chunk),
 		})
 		if err != nil {
-			return Result{}, fmt.Errorf("AI chunk review failed for %s: %w", chunk.FileID, err)
+			failures = append(failures, aiFailure{Stage: "file-review", FileID: chunk.FileID, LineRange: chunk.LineRange, ChunkIndex: i + 1, Error: err.Error()})
+			progress.Emit("file-review-failed", fmt.Sprintf("AI corpus chunk %d/%d failed; continuing", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "error": err.Error()})
+			continue
+		}
+		if err := writeCheckpoint(checkpointPath, resp.Text); err != nil {
+			return Result{}, err
 		}
 		sections = append(sections, aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: resp.Text})
+		completedChunks++
 	}
 
 	progress.Emit("report", "writing AI Markdown report", "", 0, 0, nil)
-	if err := writeMarkdownReport(reportPath, cfg, manifest, sections, manifestPath, progressPath, redactionMapPath, now()); err != nil {
+	if err := writeMarkdownReport(reportPath, cfg, manifest, sections, failures, manifestPath, progressPath, redactionMapPath, chunkDir, now()); err != nil {
 		return Result{}, err
 	}
-	progress.Emit("done", "AI analysis complete", "", len(prepared), len(prepared), map[string]any{"report": reportPath})
+	partial := len(failures) > 0
+	doneMessage := "AI analysis complete"
+	if partial {
+		doneMessage = "AI analysis complete with partial results"
+	}
+	progress.Emit("done", doneMessage, "", completedChunks, len(chunks), map[string]any{"report": reportPath, "failed_chunks": countChunkFailures(failures)})
 
 	return Result{
 		ReportPath:       reportPath,
@@ -98,6 +144,9 @@ func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 		RedactionMapPath: redactionMapPath,
 		FileCount:        len(prepared),
 		ChunkCount:       len(chunks),
+		CompletedChunks:  completedChunks,
+		FailedChunks:     countChunkFailures(failures),
+		Partial:          partial,
 		Provider:         cfg.Provider,
 		Model:            cfg.Model,
 	}, nil
@@ -143,6 +192,14 @@ type aiChunk struct {
 	Text      string
 }
 
+type aiFailure struct {
+	Stage      string
+	FileID     string
+	LineRange  string
+	ChunkIndex int
+	Error      string
+}
+
 func prepareFiles(redactor *Redactor, files []CorpusFile) []preparedFile {
 	out := make([]preparedFile, 0, len(files))
 	seen := make(map[string]bool)
@@ -174,7 +231,7 @@ func prepareFiles(redactor *Redactor, files []CorpusFile) []preparedFile {
 	return out
 }
 
-func buildChunks(files []preparedFile) []aiChunk {
+func buildChunks(files []preparedFile, maxCloudPromptChars int) []aiChunk {
 	var chunks []aiChunk
 	for _, file := range files {
 		lines := strings.SplitAfter(file.CloudContent, "\n")
@@ -207,6 +264,46 @@ func buildChunks(files []preparedFile) []aiChunk {
 		}
 	}
 	return chunks
+}
+
+func normalizedChunkChars(value int) int {
+	if value > 0 {
+		return value
+	}
+	return DefaultAIChunkChars
+}
+
+func chunkCheckpointName(index int, chunk aiChunk) string {
+	return fmt.Sprintf("chunk_%04d_%s.md", index+1, sanitizeCloudPathSegment(chunk.FileID))
+}
+
+func readCheckpoint(path string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return string(data), true, nil
+	}
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	return "", false, fmt.Errorf("reading AI checkpoint %s: %w", path, err)
+}
+
+func writeCheckpoint(path, text string) error {
+	text = strings.TrimSpace(text) + "\n"
+	if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+		return fmt.Errorf("writing AI checkpoint %s: %w", path, err)
+	}
+	return nil
+}
+
+func countChunkFailures(failures []aiFailure) int {
+	count := 0
+	for _, failure := range failures {
+		if failure.Stage == "file-review" {
+			count++
+		}
+	}
+	return count
 }
 
 func buildManifest(now time.Time, cfg Config, files []preparedFile, chunks []aiChunk) Manifest {

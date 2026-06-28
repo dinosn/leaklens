@@ -22,6 +22,12 @@ const (
 	CloudRedactionExpanded CloudRedactionMode = "expanded"
 )
 
+const (
+	DefaultAITimeout    = 5 * time.Minute
+	DefaultAIRetries    = 3
+	DefaultAIChunkChars = 30000
+)
+
 type Config struct {
 	Provider           string
 	Model              string
@@ -33,6 +39,10 @@ type Config struct {
 	Progress           io.Writer
 	HTTPClient         *http.Client
 	Client             Client
+	Timeout            time.Duration
+	Retries            int
+	ChunkChars         int
+	Resume             bool
 	Now                func() time.Time
 }
 
@@ -98,6 +108,9 @@ type Result struct {
 	RedactionMapPath string
 	FileCount        int
 	ChunkCount       int
+	CompletedChunks  int
+	FailedChunks     int
+	Partial          bool
 	Provider         string
 	Model            string
 }
