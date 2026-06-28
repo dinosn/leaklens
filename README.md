@@ -339,6 +339,9 @@ export LEAKLENS_AI_PROVIDER=openai        # openai or anthropic
 export LEAKLENS_AI_MODEL=your-model-name
 export LEAKLENS_OPENAI_API_KEY=...
 export LEAKLENS_ANTHROPIC_API_KEY=...
+export LEAKLENS_AI_TIMEOUT=5m             # optional per provider request timeout
+export LEAKLENS_AI_RETRIES=3              # optional transient provider retry count
+export LEAKLENS_AI_CHUNK_CHARS=30000      # optional max redacted characters per AI chunk
 ```
 
 Examples:
@@ -359,6 +362,7 @@ AI flags:
 | `--ai-report-dir` | | Directory for AI artifacts. Default: `leaklens-ai/<target>-<timestamp>`. |
 | `--ai-cloud-redaction` | `standard` | Cloud redaction mode: `standard` or `expanded`. Target URLs and hostnames are always redacted in both modes. |
 | `--ai-progress` | `text` | AI progress output: `text` or `quiet`. A JSON-lines progress artifact is always written. |
+| `--ai-resume` | `false` | Reuse completed AI response checkpoints from the same `--ai-report-dir`. |
 
 AI artifacts:
 
@@ -368,6 +372,14 @@ AI artifacts:
 | `corpus-manifest.json` | Local manifest of every file selected for AI review, its cloud-redacted path, size, line count, and chunk count. |
 | `ai-progress.ndjson` | Machine-readable progress events for long-running AI analysis. |
 | `ai-redaction-map.json` | Local-only mapping from redacted cloud placeholders back to real origins, hostnames, and file paths. Do not upload this file to third parties. |
+| `ai-chunks/` | Checkpointed provider responses for completed overview and file-chunk reviews. These are reused by `--ai-resume`. |
+
+AI provider resilience:
+
+- Transient provider failures such as request timeouts, HTTP 408, HTTP 429, and HTTP 5xx responses are retried according to `LEAKLENS_AI_RETRIES`.
+- A failed overview or file chunk no longer aborts the whole scan after the local corpus is built. LeakLens writes a partial Markdown report, records failed stages in `AI Failures`, and preserves successful responses in `ai-chunks/`.
+- To continue a long run, rerun the same scan with the same `--ai-report-dir --ai-resume`. Completed checkpoints are reused and only missing chunks are sent to the provider.
+- Use `LEAKLENS_AI_TIMEOUT` for slow provider responses and `LEAKLENS_AI_CHUNK_CHARS` to reduce request size for models or networks that time out on large chunks.
 
 Cloud redaction behavior:
 

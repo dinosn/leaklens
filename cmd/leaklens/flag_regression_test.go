@@ -105,6 +105,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldAIReportDir := scanAIReportDir
 	oldAICloudRedaction := scanAICloudRedaction
 	oldAIProgress := scanAIProgress
+	oldAIResume := scanAIResume
 	oldAIResolvedReportDir := scanAIResolvedReportDir
 	oldAITargetHints := append([]string(nil), scanAITargetHints...)
 	oldAIClient := scanAIClient
@@ -142,6 +143,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanAIReportDir = oldAIReportDir
 		scanAICloudRedaction = oldAICloudRedaction
 		scanAIProgress = oldAIProgress
+		scanAIResume = oldAIResume
 		scanAIResolvedReportDir = oldAIResolvedReportDir
 		scanAITargetHints = oldAITargetHints
 		scanAIClient = oldAIClient
@@ -179,6 +181,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanAIReportDir = ""
 	scanAICloudRedaction = "standard"
 	scanAIProgress = "text"
+	scanAIResume = false
 	scanAIResolvedReportDir = ""
 	scanAITargetHints = nil
 	scanAIClient = nil
@@ -379,6 +382,43 @@ func TestValidateScanOptionsRequiresAIEnvOnlyConfiguration(t *testing.T) {
 	t.Setenv("LEAKLENS_OPENAI_API_KEY", "test-key")
 	if err := validateScanOptions(); err != nil {
 		t.Fatalf("expected AI env validation to pass, got %v", err)
+	}
+}
+
+func TestValidateScanOptionsAcceptsAIRuntimeEnvConfiguration(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+	scanAI = true
+	t.Setenv("LEAKLENS_AI_PROVIDER", "openai")
+	t.Setenv("LEAKLENS_AI_MODEL", "test-model")
+	t.Setenv("LEAKLENS_OPENAI_API_KEY", "test-key")
+	t.Setenv("LEAKLENS_AI_TIMEOUT", "7m")
+	t.Setenv("LEAKLENS_AI_RETRIES", "0")
+	t.Setenv("LEAKLENS_AI_CHUNK_CHARS", "12345")
+
+	if err := validateScanOptions(); err != nil {
+		t.Fatalf("expected AI runtime env validation to pass, got %v", err)
+	}
+	options, err := aiRuntimeOptionsFromEnv()
+	if err != nil {
+		t.Fatalf("aiRuntimeOptionsFromEnv failed: %v", err)
+	}
+	if options.Timeout.String() != "7m0s" || options.Retries != 0 || options.ChunkChars != 12345 {
+		t.Fatalf("unexpected AI runtime options: %#v", options)
+	}
+}
+
+func TestValidateScanOptionsRejectsInvalidAIRuntimeEnvConfiguration(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+	scanAI = true
+	t.Setenv("LEAKLENS_AI_PROVIDER", "openai")
+	t.Setenv("LEAKLENS_AI_MODEL", "test-model")
+	t.Setenv("LEAKLENS_OPENAI_API_KEY", "test-key")
+	t.Setenv("LEAKLENS_AI_RETRIES", "-1")
+
+	if err := validateScanOptions(); err == nil || !strings.Contains(err.Error(), "LEAKLENS_AI_RETRIES") {
+		t.Fatalf("expected invalid retry env error, got %v", err)
 	}
 }
 

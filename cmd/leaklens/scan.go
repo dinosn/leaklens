@@ -108,6 +108,7 @@ var (
 	scanAIReportDir          string
 	scanAICloudRedaction     string
 	scanAIProgress           string
+	scanAIResume             bool
 	scanAIResolvedReportDir  string
 	scanAITargetHints        []string
 	scanAIClient             aianalysis.Client
@@ -178,6 +179,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanAIReportDir, "ai-report-dir", "", "Directory for AI Markdown, manifest, progress, and redaction artifacts")
 	scanCmd.Flags().StringVar(&scanAICloudRedaction, "ai-cloud-redaction", "standard", "Cloud redaction mode: standard or expanded; target URLs and hosts are always redacted")
 	scanCmd.Flags().StringVar(&scanAIProgress, "ai-progress", "text", "AI progress output: text or quiet")
+	scanCmd.Flags().BoolVar(&scanAIResume, "ai-resume", false, "Reuse completed AI response checkpoints from --ai-report-dir")
 }
 
 // blobJob represents a unit of work for the worker pool.
@@ -460,6 +462,9 @@ func validateAIOptions() error {
 	default:
 		return fmt.Errorf("unknown --ai-progress: %s", scanAIProgress)
 	}
+	if _, err := aiRuntimeOptionsFromEnv(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(os.Getenv("LEAKLENS_AI_PROVIDER")) == "" {
 		return fmt.Errorf("LEAKLENS_AI_PROVIDER is required when --ai is enabled")
 	}
@@ -480,6 +485,51 @@ func validateAIOptions() error {
 		return fmt.Errorf("unsupported LEAKLENS_AI_PROVIDER: %s", provider)
 	}
 	return nil
+}
+
+type aiRuntimeOptions struct {
+	Timeout    time.Duration
+	Retries    int
+	ChunkChars int
+}
+
+func aiRuntimeOptionsFromEnv() (aiRuntimeOptions, error) {
+	options := aiRuntimeOptions{
+		Timeout:    aianalysis.DefaultAITimeout,
+		Retries:    aianalysis.DefaultAIRetries,
+		ChunkChars: aianalysis.DefaultAIChunkChars,
+	}
+	if value := strings.TrimSpace(os.Getenv("LEAKLENS_AI_TIMEOUT")); value != "" {
+		timeout, err := time.ParseDuration(value)
+		if err != nil {
+			return options, fmt.Errorf("invalid LEAKLENS_AI_TIMEOUT: %w", err)
+		}
+		if timeout <= 0 {
+			return options, fmt.Errorf("LEAKLENS_AI_TIMEOUT must be greater than 0")
+		}
+		options.Timeout = timeout
+	}
+	if value := strings.TrimSpace(os.Getenv("LEAKLENS_AI_RETRIES")); value != "" {
+		retries, err := strconv.Atoi(value)
+		if err != nil {
+			return options, fmt.Errorf("invalid LEAKLENS_AI_RETRIES: %w", err)
+		}
+		if retries < 0 {
+			return options, fmt.Errorf("LEAKLENS_AI_RETRIES must be >= 0")
+		}
+		options.Retries = retries
+	}
+	if value := strings.TrimSpace(os.Getenv("LEAKLENS_AI_CHUNK_CHARS")); value != "" {
+		chunkChars, err := strconv.Atoi(value)
+		if err != nil {
+			return options, fmt.Errorf("invalid LEAKLENS_AI_CHUNK_CHARS: %w", err)
+		}
+		if chunkChars <= 0 {
+			return options, fmt.Errorf("LEAKLENS_AI_CHUNK_CHARS must be greater than 0")
+		}
+		options.ChunkChars = chunkChars
+	}
+	return options, nil
 }
 
 func prepareAIOutput(targetLabel string, mirrorDownloads bool, targetHints []string) error {
@@ -524,6 +574,10 @@ func runAIAnalysis(ctx context.Context, cmd *cobra.Command, files []aianalysis.C
 	if !quiet && scanAIProgress == "text" {
 		progress = cmd.ErrOrStderr()
 	}
+	runtimeOptions, err := aiRuntimeOptionsFromEnv()
+	if err != nil {
+		return aianalysis.Result{}, err
+	}
 	cfg := aianalysis.Config{
 		Provider:           provider,
 		Model:              os.Getenv("LEAKLENS_AI_MODEL"),
@@ -534,6 +588,10 @@ func runAIAnalysis(ctx context.Context, cmd *cobra.Command, files []aianalysis.C
 		TargetHints:        scanAITargetHints,
 		Progress:           progress,
 		Client:             scanAIClient,
+		Timeout:            runtimeOptions.Timeout,
+		Retries:            runtimeOptions.Retries,
+		ChunkChars:         runtimeOptions.ChunkChars,
+		Resume:             scanAIResume,
 	}
 	return aianalysis.Run(ctx, cfg, files)
 }
@@ -545,6 +603,10 @@ func printAIStats(cmd *cobra.Command, format string, result aianalysis.Result) {
 	out := cmd.OutOrStdout()
 	if format == "json" || format == "sarif" {
 		out = cmd.ErrOrStderr()
+	}
+	if result.Partial {
+		fmt.Fprintf(out, "AI analysis partial report: %s (%d files, %d/%d chunks complete, %d failed)\n\n", result.ReportPath, result.FileCount, result.CompletedChunks, result.ChunkCount, result.FailedChunks)
+		return
 	}
 	fmt.Fprintf(out, "AI analysis report: %s (%d files, %d chunks)\n\n", result.ReportPath, result.FileCount, result.ChunkCount)
 }
