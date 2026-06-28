@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var tlsFallbackWarningAuthorities sync.Map
+
 func newTLSFallbackHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
@@ -40,7 +42,6 @@ func newTLSFallbackTransport() http.RoundTripper {
 type tlsFallbackTransport struct {
 	primary  http.RoundTripper
 	insecure http.RoundTripper
-	warned   sync.Map
 }
 
 func (t *tlsFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -56,7 +57,7 @@ func (t *tlsFallbackTransport) RoundTrip(req *http.Request) (*http.Response, err
 
 	if req.URL != nil {
 		authority := req.URL.Scheme + "://" + req.URL.Host
-		if _, loaded := t.warned.LoadOrStore(authority, struct{}{}); !loaded {
+		if _, loaded := tlsFallbackWarningAuthorities.LoadOrStore(authority, struct{}{}); !loaded {
 			warnf("warning: TLS certificate verification failed for %s; retrying without certificate verification: %v\n", authority, err)
 		}
 	}
