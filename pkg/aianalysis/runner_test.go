@@ -6,17 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 type fakeClient struct {
+	mu       sync.Mutex
 	calls    []CompletionRequest
 	failCall int
 	failErr  error
 }
 
 func (f *fakeClient) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, req)
 	if f.failCall == len(f.calls) {
 		return CompletionResponse{}, f.failErr
@@ -176,5 +180,93 @@ func TestRunResumeUsesCompletedCheckpoints(t *testing.T) {
 	}
 	if !strings.Contains(string(report), "chunk from checkpoint") {
 		t.Fatalf("report did not use checkpoint body:\n%s", string(report))
+	}
+}
+
+type parallelCheckingClient struct {
+	mu           sync.Mutex
+	inFlight     int
+	maxInFlight  int
+	chunkCalls   int
+	seenParallel chan struct{}
+	closed       bool
+}
+
+func newParallelCheckingClient() *parallelCheckingClient {
+	return &parallelCheckingClient{seenParallel: make(chan struct{})}
+}
+
+func (c *parallelCheckingClient) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	if !strings.Contains(req.UserPrompt, "Review this JavaScript/JSON corpus chunk") {
+		return CompletionResponse{Text: "overview"}, nil
+	}
+
+	c.mu.Lock()
+	c.chunkCalls++
+	c.inFlight++
+	if c.inFlight > c.maxInFlight {
+		c.maxInFlight = c.inFlight
+	}
+	if c.inFlight >= 2 && !c.closed {
+		close(c.seenParallel)
+		c.closed = true
+	}
+	c.mu.Unlock()
+
+	select {
+	case <-c.seenParallel:
+	case <-ctx.Done():
+		c.finish()
+		return CompletionResponse{}, ctx.Err()
+	case <-time.After(2 * time.Second):
+		c.finish()
+		return CompletionResponse{}, errors.New("timed out waiting for parallel chunk review")
+	}
+
+	c.finish()
+	return CompletionResponse{Text: "parallel chunk review"}, nil
+}
+
+func (c *parallelCheckingClient) finish() {
+	c.mu.Lock()
+	c.inFlight--
+	c.mu.Unlock()
+}
+
+func TestRunReviewsChunksInParallel(t *testing.T) {
+	client := newParallelCheckingClient()
+	reportDir := t.TempDir()
+	cfg := Config{
+		Provider:           "openai",
+		Model:              "test-model",
+		APIKey:             "test-key",
+		Mode:               ModeAll,
+		CloudRedactionMode: CloudRedactionStandard,
+		ReportDir:          reportDir,
+		Client:             client,
+		ChunkChars:         20,
+		Concurrency:        2,
+	}
+	files := []CorpusFile{
+		{ID: "FILE_001", Path: "one.js", Kind: "file", BlobID: "one", Size: 16, Content: []byte("const one = 1;\n")},
+		{ID: "FILE_002", Path: "two.js", Kind: "file", BlobID: "two", Size: 16, Content: []byte("const two = 2;\n")},
+		{ID: "FILE_003", Path: "three.js", Kind: "file", BlobID: "three", Size: 18, Content: []byte("const three = 3;\n")},
+	}
+
+	result, err := Run(context.Background(), cfg, files)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if result.Partial {
+		t.Fatalf("expected complete result, got %#v", result)
+	}
+	if result.CompletedChunks != 3 {
+		t.Fatalf("expected 3 completed chunks, got %#v", result)
+	}
+	client.mu.Lock()
+	maxInFlight := client.maxInFlight
+	client.mu.Unlock()
+	if maxInFlight < 2 {
+		t.Fatalf("expected parallel chunk review, max in-flight was %d", maxInFlight)
 	}
 }

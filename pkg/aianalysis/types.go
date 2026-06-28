@@ -23,9 +23,10 @@ const (
 )
 
 const (
-	DefaultAITimeout    = 5 * time.Minute
-	DefaultAIRetries    = 3
-	DefaultAIChunkChars = 30000
+	DefaultAITimeout     = 5 * time.Minute
+	DefaultAIRetries     = 3
+	DefaultAIChunkChars  = 60000
+	DefaultAIConcurrency = 3
 )
 
 type Config struct {
@@ -42,6 +43,7 @@ type Config struct {
 	Timeout            time.Duration
 	Retries            int
 	ChunkChars         int
+	Concurrency        int
 	Resume             bool
 	Now                func() time.Time
 }

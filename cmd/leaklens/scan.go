@@ -488,16 +488,18 @@ func validateAIOptions() error {
 }
 
 type aiRuntimeOptions struct {
-	Timeout    time.Duration
-	Retries    int
-	ChunkChars int
+	Timeout     time.Duration
+	Retries     int
+	ChunkChars  int
+	Concurrency int
 }
 
 func aiRuntimeOptionsFromEnv() (aiRuntimeOptions, error) {
 	options := aiRuntimeOptions{
-		Timeout:    aianalysis.DefaultAITimeout,
-		Retries:    aianalysis.DefaultAIRetries,
-		ChunkChars: aianalysis.DefaultAIChunkChars,
+		Timeout:     aianalysis.DefaultAITimeout,
+		Retries:     aianalysis.DefaultAIRetries,
+		ChunkChars:  aianalysis.DefaultAIChunkChars,
+		Concurrency: aianalysis.DefaultAIConcurrency,
 	}
 	if value := strings.TrimSpace(os.Getenv("LEAKLENS_AI_TIMEOUT")); value != "" {
 		timeout, err := time.ParseDuration(value)
@@ -528,6 +530,16 @@ func aiRuntimeOptionsFromEnv() (aiRuntimeOptions, error) {
 			return options, fmt.Errorf("LEAKLENS_AI_CHUNK_CHARS must be greater than 0")
 		}
 		options.ChunkChars = chunkChars
+	}
+	if value := strings.TrimSpace(os.Getenv("LEAKLENS_AI_CONCURRENCY")); value != "" {
+		concurrency, err := strconv.Atoi(value)
+		if err != nil {
+			return options, fmt.Errorf("invalid LEAKLENS_AI_CONCURRENCY: %w", err)
+		}
+		if concurrency < 1 {
+			return options, fmt.Errorf("LEAKLENS_AI_CONCURRENCY must be >= 1")
+		}
+		options.Concurrency = concurrency
 	}
 	return options, nil
 }
@@ -591,6 +603,7 @@ func runAIAnalysis(ctx context.Context, cmd *cobra.Command, files []aianalysis.C
 		Timeout:            runtimeOptions.Timeout,
 		Retries:            runtimeOptions.Retries,
 		ChunkChars:         runtimeOptions.ChunkChars,
+		Concurrency:        runtimeOptions.Concurrency,
 		Resume:             scanAIResume,
 	}
 	return aianalysis.Run(ctx, cfg, files)

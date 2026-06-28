@@ -395,6 +395,7 @@ func TestValidateScanOptionsAcceptsAIRuntimeEnvConfiguration(t *testing.T) {
 	t.Setenv("LEAKLENS_AI_TIMEOUT", "7m")
 	t.Setenv("LEAKLENS_AI_RETRIES", "0")
 	t.Setenv("LEAKLENS_AI_CHUNK_CHARS", "12345")
+	t.Setenv("LEAKLENS_AI_CONCURRENCY", "4")
 
 	if err := validateScanOptions(); err != nil {
 		t.Fatalf("expected AI runtime env validation to pass, got %v", err)
@@ -403,7 +404,7 @@ func TestValidateScanOptionsAcceptsAIRuntimeEnvConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aiRuntimeOptionsFromEnv failed: %v", err)
 	}
-	if options.Timeout.String() != "7m0s" || options.Retries != 0 || options.ChunkChars != 12345 {
+	if options.Timeout.String() != "7m0s" || options.Retries != 0 || options.ChunkChars != 12345 || options.Concurrency != 4 {
 		t.Fatalf("unexpected AI runtime options: %#v", options)
 	}
 }
@@ -419,6 +420,12 @@ func TestValidateScanOptionsRejectsInvalidAIRuntimeEnvConfiguration(t *testing.T
 
 	if err := validateScanOptions(); err == nil || !strings.Contains(err.Error(), "LEAKLENS_AI_RETRIES") {
 		t.Fatalf("expected invalid retry env error, got %v", err)
+	}
+
+	t.Setenv("LEAKLENS_AI_RETRIES", "")
+	t.Setenv("LEAKLENS_AI_CONCURRENCY", "0")
+	if err := validateScanOptions(); err == nil || !strings.Contains(err.Error(), "LEAKLENS_AI_CONCURRENCY") {
+		t.Fatalf("expected invalid concurrency env error, got %v", err)
 	}
 }
 
