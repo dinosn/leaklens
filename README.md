@@ -326,6 +326,62 @@ Targets can be:
 | `--js-intel-generic-secrets` | `false` | Enable low-confidence JS-style generic secret heuristics. |
 | `--js-intel-npm-check` | `false` | Actively check discovered npm packages for public-registry misses. |
 
+### AI-Assisted JS Review
+
+LeakLens can run an optional AI-assisted review after the normal deterministic scan. This is intended for authorized validation and remediation work over JavaScript, TypeScript, JSON, and source-map artifacts. The scanner rules still run first and remain the deterministic source of secret findings. The AI layer is a second-stage analyst that reviews the collected files, explains application behavior, proposes additional secret candidates, and writes owner-facing test plans.
+
+AI review works with crawled sites, direct URL scans, URL-file scans, local files, local directories, local Git repositories, and cloned GitHub/GitLab targets. For URL and crawl scans, `--ai` automatically enables downloaded-file storage. If `--download-dir` is not supplied, LeakLens creates one under the AI report directory.
+
+Provider configuration is environment-only so API keys are not exposed in command lines:
+
+```bash
+export LEAKLENS_AI_PROVIDER=openai        # openai or anthropic
+export LEAKLENS_AI_MODEL=your-model-name
+export LEAKLENS_OPENAI_API_KEY=...
+export LEAKLENS_ANTHROPIC_API_KEY=...
+```
+
+Examples:
+
+```bash
+leaklens scan --crawl --ai https://example.com
+leaklens scan --ai --ai-mode secrets path/to/downloaded-site
+leaklens scan --ai --ai-mode appsec --ai-report-dir reports/example path/to/app
+leaklens scan --crawl --ai --ai-cloud-redaction expanded https://example.com
+```
+
+AI flags:
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--ai` | `false` | Run AI-assisted JS/JSON analysis after scanning. |
+| `--ai-mode` | `all` | AI analysis mode: `secrets`, `appsec`, or `all`. |
+| `--ai-report-dir` | | Directory for AI artifacts. Default: `leaklens-ai/<target>-<timestamp>`. |
+| `--ai-cloud-redaction` | `standard` | Cloud redaction mode: `standard` or `expanded`. Target URLs and hostnames are always redacted in both modes. |
+| `--ai-progress` | `text` | AI progress output: `text` or `quiet`. A JSON-lines progress artifact is always written. |
+
+AI artifacts:
+
+| File | Description |
+| --- | --- |
+| `leaklens-ai-report.md` | Markdown report with scope, coverage, AI findings, curl-style validation ideas, locations, and remediation notes. |
+| `corpus-manifest.json` | Local manifest of every file selected for AI review, its cloud-redacted path, size, line count, and chunk count. |
+| `ai-progress.ndjson` | Machine-readable progress events for long-running AI analysis. |
+| `ai-redaction-map.json` | Local-only mapping from redacted cloud placeholders back to real origins, hostnames, and file paths. Do not upload this file to third parties. |
+
+Cloud redaction behavior:
+
+- Target URLs and hostnames are always redacted before provider submission. This is not bypassable by flags.
+- URL paths are preserved so AI can still reason about endpoints. For example, `https://www.example.com/api/admin/config` is sent as `TARGET_ORIGIN_1/api/admin/config`.
+- Third-party origins are also redacted, for example `https://cdn.vendor.com/lib.js` becomes `EXTERNAL_ORIGIN_1/lib.js`.
+- Local absolute paths are replaced with file placeholders before provider submission.
+
+`--ai-cloud-redaction standard` redacts obvious credentials, authorization headers, cookie values, secret-bearing query values, and generic high-entropy strings before provider submission. It keeps variable names, function names, endpoint paths, HTTP methods, and structural context.
+
+`--ai-cloud-redaction expanded` still redacts target URLs, hostnames, local paths, authorization headers, cookie values, and obvious credential assignments, but preserves more non-URL JavaScript context. Use this mode when deeper AI reasoning over config and string literals is needed. It does not disable target URL redaction.
+
+LeakLens does not execute AI-generated curl commands. The report contains validation plans only. Active testing may be added later behind a separate explicit option.
+
 ## GitHub and GitLab
 
 Direct repository references work through `scan`:
