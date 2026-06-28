@@ -110,6 +110,7 @@ var (
 	scanAIProgress           string
 	scanAIResolvedReportDir  string
 	scanAITargetHints        []string
+	scanAIClient             aianalysis.Client
 )
 
 var scanCmd = &cobra.Command{
@@ -532,6 +533,7 @@ func runAIAnalysis(ctx context.Context, cmd *cobra.Command, files []aianalysis.C
 		ReportDir:          scanAIResolvedReportDir,
 		TargetHints:        scanAITargetHints,
 		Progress:           progress,
+		Client:             scanAIClient,
 	}
 	return aianalysis.Run(ctx, cfg, files)
 }
@@ -627,7 +629,10 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	}
 
 	// Scan with parallel workers
-	ctx := context.Background()
+	scanCtx := cmd.Context()
+	if scanCtx == nil {
+		scanCtx = context.Background()
+	}
 	var matchCount atomic.Int64
 	var findingCount atomic.Int64
 	var skippedCount atomic.Int64
@@ -654,7 +659,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	}
 	jobs := make(chan blobJob, 2*numWorkers)
 
-	g, ctx := errgroup.WithContext(ctx)
+	g, workerCtx := errgroup.WithContext(scanCtx)
 
 	// Producer: enumerate blobs and send to workers (NO DB writes)
 	g.Go(func() error {
@@ -690,12 +695,12 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 			select {
 			case jobs <- blobJob{content: content, blobID: blobID, prov: prov}:
 				return nil
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-workerCtx.Done():
+				return workerCtx.Err()
 			}
 		}
 
-		return enumerator.Enumerate(ctx, func(content []byte, blobID types.BlobID, prov types.Provenance) error {
+		return enumerator.Enumerate(workerCtx, func(content []byte, blobID types.BlobID, prov types.Provenance) error {
 			if err := enqueue(content, blobID, prov); err != nil {
 				return err
 			}
@@ -827,7 +832,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 					match.Location.Source.End.Column = endCol
 				}
 
-				validateMatches(ctx, validationEngine, matches, verbose)
+				validateMatches(workerCtx, validationEngine, matches, verbose)
 				matchCount.Add(int64(len(matches)))
 
 				// Inline per-file reporting for human format
@@ -866,7 +871,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 		aiMu.Lock()
 		files := append([]aianalysis.CorpusFile(nil), aiFiles...)
 		aiMu.Unlock()
-		result, err := runAIAnalysis(ctx, cmd, files)
+		result, err := runAIAnalysis(scanCtx, cmd, files)
 		if err != nil {
 			return fmt.Errorf("ai analysis: %w", err)
 		}

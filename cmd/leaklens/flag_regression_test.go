@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dinosn/leaklens/pkg/aianalysis"
 	"github.com/dinosn/leaklens/pkg/enum"
 	"github.com/dinosn/leaklens/pkg/types"
 	"github.com/spf13/cobra"
@@ -39,6 +41,18 @@ func (e oneURLBlobEnumerator) Enumerate(ctx context.Context, callback func(conte
 	default:
 	}
 	return callback(e.content, types.ComputeBlobID(e.content), types.URLProvenance{URL: e.rawURL})
+}
+
+type contextCheckingAIClient struct {
+	calls int
+}
+
+func (c *contextCheckingAIClient) Complete(ctx context.Context, req aianalysis.CompletionRequest) (aianalysis.CompletionResponse, error) {
+	c.calls++
+	if err := ctx.Err(); err != nil {
+		return aianalysis.CompletionResponse{}, err
+	}
+	return aianalysis.CompletionResponse{Text: "AI review complete"}, nil
 }
 
 func writeRegressionRule(t *testing.T) string {
@@ -93,6 +107,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldAIProgress := scanAIProgress
 	oldAIResolvedReportDir := scanAIResolvedReportDir
 	oldAITargetHints := append([]string(nil), scanAITargetHints...)
+	oldAIClient := scanAIClient
 
 	t.Cleanup(func() {
 		quiet = oldQuiet
@@ -129,6 +144,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanAIProgress = oldAIProgress
 		scanAIResolvedReportDir = oldAIResolvedReportDir
 		scanAITargetHints = oldAITargetHints
+		scanAIClient = oldAIClient
 	})
 
 	quiet = false
@@ -165,6 +181,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanAIProgress = "text"
 	scanAIResolvedReportDir = ""
 	scanAITargetHints = nil
+	scanAIClient = nil
 }
 
 func runRegressionScan(t *testing.T, outputPath string) bytes.Buffer {
@@ -384,6 +401,36 @@ func TestPrepareAIOutputAutoSetsDownloadDirForURLScans(t *testing.T) {
 	}
 	if len(scanAITargetHints) != 1 || scanAITargetHints[0] != "https://www.example.test/app/" {
 		t.Fatalf("unexpected target hints: %#v", scanAITargetHints)
+	}
+}
+
+func TestRunEnumeratorScan_AIRunsAfterScanWithActiveContext(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+	scanAI = true
+	scanAIResolvedReportDir = t.TempDir()
+	scanAIProgress = "quiet"
+	fakeAI := &contextCheckingAIClient{}
+	scanAIClient = fakeAI
+	t.Setenv("LEAKLENS_AI_PROVIDER", "openai")
+	t.Setenv("LEAKLENS_AI_MODEL", "test-model")
+	t.Setenv("LEAKLENS_OPENAI_API_KEY", "test-key")
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := runEnumeratorScan(cmd, oneBlobEnumerator{
+		content: []byte(`fetch("/api/test"); const apiKey = "dummy_secret_value_for_redaction_tests";`),
+		path:    "app.js",
+	})
+	if err != nil {
+		t.Fatalf("runEnumeratorScan failed: %v", err)
+	}
+	if fakeAI.calls == 0 {
+		t.Fatal("expected fake AI client to be called")
+	}
+	if _, err := os.Stat(filepath.Join(scanAIResolvedReportDir, "leaklens-ai-report.md")); err != nil {
+		t.Fatalf("expected AI report to be written: %v", err)
 	}
 }
 
