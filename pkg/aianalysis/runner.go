@@ -9,7 +9,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
@@ -94,36 +97,16 @@ func Run(ctx context.Context, cfg Config, files []CorpusFile) (Result, error) {
 		}
 	}
 
-	completedChunks := 0
-	for i, chunk := range chunks {
-		checkpointPath := filepath.Join(chunkDir, chunkCheckpointName(i, chunk))
-		if cfg.Resume {
-			text, ok, err := readCheckpoint(checkpointPath)
-			if err != nil {
-				return Result{}, err
-			}
-			if ok {
-				progress.Emit("file-review", fmt.Sprintf("reusing AI corpus chunk %d/%d checkpoint", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "checkpoint": filepath.Base(checkpointPath)})
-				sections = append(sections, aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: text})
-				completedChunks++
-				continue
-			}
+	concurrency := normalizedConcurrency(cfg.Concurrency, len(chunks))
+	chunkSections, chunkFailures, completedChunks, err := reviewChunks(ctx, cfg, client, progress, systemPrompt, chunkDir, chunks, concurrency)
+	if err != nil {
+		return Result{}, err
+	}
+	failures = append(failures, chunkFailures...)
+	for _, section := range chunkSections {
+		if section.Body != "" {
+			sections = append(sections, section)
 		}
-		progress.Emit("file-review", fmt.Sprintf("reviewing AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange})
-		resp, err := client.Complete(ctx, CompletionRequest{
-			SystemPrompt: systemPrompt,
-			UserPrompt:   buildChunkPrompt(cfg, chunk),
-		})
-		if err != nil {
-			failures = append(failures, aiFailure{Stage: "file-review", FileID: chunk.FileID, LineRange: chunk.LineRange, ChunkIndex: i + 1, Error: err.Error()})
-			progress.Emit("file-review-failed", fmt.Sprintf("AI corpus chunk %d/%d failed; continuing", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "error": err.Error()})
-			continue
-		}
-		if err := writeCheckpoint(checkpointPath, resp.Text); err != nil {
-			return Result{}, err
-		}
-		sections = append(sections, aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: resp.Text})
-		completedChunks++
 	}
 
 	progress.Emit("report", "writing AI Markdown report", "", 0, 0, nil)
@@ -273,6 +256,101 @@ func normalizedChunkChars(value int) int {
 	return DefaultAIChunkChars
 }
 
+func normalizedConcurrency(value, chunkCount int) int {
+	if chunkCount <= 0 {
+		return 1
+	}
+	if value <= 0 {
+		value = DefaultAIConcurrency
+	}
+	if value > chunkCount {
+		return chunkCount
+	}
+	return value
+}
+
+func reviewChunks(ctx context.Context, cfg Config, client Client, progress *progressWriter, systemPrompt, chunkDir string, chunks []aiChunk, concurrency int) ([]aiSection, []aiFailure, int, error) {
+	progress.Emit("file-review", fmt.Sprintf("reviewing AI corpus chunks with concurrency %d", concurrency), "", 0, len(chunks), map[string]any{"concurrency": concurrency})
+
+	sections := make([]aiSection, len(chunks))
+	completed := make([]bool, len(chunks))
+	var failures []aiFailure
+	var mu sync.Mutex
+
+	recordFailure := func(failure aiFailure) {
+		mu.Lock()
+		failures = append(failures, failure)
+		mu.Unlock()
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	jobs := make(chan int)
+	for worker := 0; worker < concurrency; worker++ {
+		group.Go(func() error {
+			for i := range jobs {
+				chunk := chunks[i]
+				checkpointPath := filepath.Join(chunkDir, chunkCheckpointName(i, chunk))
+				if cfg.Resume {
+					text, ok, err := readCheckpoint(checkpointPath)
+					if err != nil {
+						return err
+					}
+					if ok {
+						progress.Emit("file-review", fmt.Sprintf("reusing AI corpus chunk %d/%d checkpoint", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "checkpoint": filepath.Base(checkpointPath)})
+						sections[i] = aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: text}
+						completed[i] = true
+						continue
+					}
+				}
+				progress.Emit("file-review", fmt.Sprintf("reviewing AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange})
+				resp, err := client.Complete(groupCtx, CompletionRequest{
+					SystemPrompt: systemPrompt,
+					UserPrompt:   buildChunkPrompt(cfg, chunk),
+				})
+				if err != nil {
+					recordFailure(aiFailure{Stage: "file-review", FileID: chunk.FileID, LineRange: chunk.LineRange, ChunkIndex: i + 1, Error: err.Error()})
+					progress.Emit("file-review-failed", fmt.Sprintf("AI corpus chunk %d/%d failed; continuing", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange, "error": err.Error()})
+					continue
+				}
+				if err := writeCheckpoint(checkpointPath, resp.Text); err != nil {
+					return err
+				}
+				sections[i] = aiSection{Title: "Review " + chunk.FileID + " " + chunk.LineRange, Body: resp.Text}
+				completed[i] = true
+				progress.Emit("file-review-done", fmt.Sprintf("completed AI corpus chunk %d/%d", i+1, len(chunks)), chunk.FileID, i+1, len(chunks), map[string]any{"line_range": chunk.LineRange})
+			}
+			return nil
+		})
+	}
+
+	for i := range chunks {
+		select {
+		case <-groupCtx.Done():
+			close(jobs)
+			if err := group.Wait(); err != nil {
+				return nil, nil, 0, err
+			}
+			return nil, nil, 0, groupCtx.Err()
+		case jobs <- i:
+		}
+	}
+	close(jobs)
+	if err := group.Wait(); err != nil {
+		return nil, nil, 0, err
+	}
+
+	sort.SliceStable(failures, func(i, j int) bool {
+		return failures[i].ChunkIndex < failures[j].ChunkIndex
+	})
+	completedCount := 0
+	for _, ok := range completed {
+		if ok {
+			completedCount++
+		}
+	}
+	return sections, failures, completedCount, nil
+}
+
 func chunkCheckpointName(index int, chunk aiChunk) string {
 	return fmt.Sprintf("chunk_%04d_%s.md", index+1, sanitizeCloudPathSegment(chunk.FileID))
 }
@@ -358,12 +436,15 @@ func writeJSON(path string, value any) error {
 }
 
 type progressWriter struct {
+	mu     sync.Mutex
 	human  io.Writer
 	ndjson io.Writer
 	now    func() time.Time
 }
 
 func (p *progressWriter) Emit(stage, message, fileID string, index, total int, extra map[string]any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	event := ProgressEvent{
 		Time:    p.now(),
 		Stage:   stage,
