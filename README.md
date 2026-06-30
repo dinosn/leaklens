@@ -2,9 +2,9 @@
 
 LeakLens is a web-aware secrets scanner for source code, Git history, local files, direct URLs, and modern JavaScript-heavy web applications.
 
-It is our own tool and repository. It started from the original [Praetorian Titus](https://github.com/praetorian-inc/titus) codebase, keeps the high-performance secret scanning engine and rule lineage, and adds a web-app workflow around crawling, JavaScript discovery, source-map recovery, and JS intelligence artifacts.
+The idea started from the original [Praetorian Titus](https://github.com/praetorian-inc/titus) codebase. LeakLens keeps the high-performance secret scanning engine and rule lineage, then extends that foundation into a web-app workflow around crawling, JavaScript discovery, source-map recovery, JS intelligence artifacts, and AI-assisted review.
 
-LeakLens uses [ProjectDiscovery Katana](https://github.com/projectdiscovery/katana) for crawling. The JS intelligence layer is inspired by concepts from PortSwigger [js-miner](https://github.com/PortSwigger/js-miner), but it is implemented in LeakLens as a separate informational layer. LeakLens secret findings still come from the scanner rule engine.
+LeakLens crawling is based on [ProjectDiscovery Katana](https://github.com/projectdiscovery/katana), with LeakLens-specific discovery and repair logic layered on top. The crawler now augments Katana output with direct HTML asset extraction, JavaScript bundle expansion, lazy chunk discovery, same-host URL repair, escaped-path normalization, and downloaded-asset mirroring before scanning. JS intelligence remains a separate informational layer; LeakLens secret findings still come from the scanner rule engine.
 
 Use LeakLens only on codebases, repositories, and websites you are authorized to test.
 
@@ -12,7 +12,7 @@ Use LeakLens only on codebases, repositories, and websites you are authorized to
 
 - CLI scanning for files, directories, Git repositories, direct URLs, and crawled websites.
 - Secret detection with optional live validation.
-- Web crawling for JS/JSON discovery using Katana.
+- Katana-based web crawling with LeakLens-specific JS/JSON discovery and URL repair.
 - URL repair for same-host JS paths that are resolved too deeply by crawlers.
 - JS intelligence for endpoints, source maps, cloud URLs, subdomains, dependencies, and opt-in dependency-confusion checks.
 - Go library usage for embedding the scanner in other internal tools.
