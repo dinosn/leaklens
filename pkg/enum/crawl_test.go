@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -191,5 +192,103 @@ func TestCrawlInitialHTMLAssetDiscoveryRetriesCertificateVerificationFailure(t *
 	}
 	if !strings.Contains(logs.String(), "TLS certificate verification failed") {
 		t.Fatalf("expected TLS verification warning, got logs: %s", logs.String())
+	}
+}
+
+func TestExtractJSAssetURLsFindsWebpackRuntimeChunks(t *testing.T) {
+	base, err := url.Parse("https://app.example.test/static/js/main.11111111.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`n.p="/",n.u=e=>"static/js/"+e+"."+{196:"22222222",257:"33333333"}[e]+".chunk.js"`)
+
+	got := extractJSAssetURLs(base, body, []string{"js", "json"})
+	sort.Strings(got)
+	want := []string{
+		"https://app.example.test/static/js/196.22222222.chunk.js",
+		"https://app.example.test/static/js/257.33333333.chunk.js",
+	}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected JS asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestDiscoverNestedJSAssetURLsFindsWebpackRuntimeChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/static/js/main.b0f8bbd9.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, `n.p="/",n.u=e=>"static/js/"+e+"."+{314:"44444444",628:"55555555"}[e]+".chunk.js"`)
+		case "/static/js/314.44444444.chunk.js", "/static/js/628.55555555.chunk.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, `console.log("chunk")`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL + "/",
+		Extensions: []string{"js", "json"},
+		Scope:      "fqdn",
+	})
+
+	got := enumerator.discoverNestedJSAssetURLs(context.Background(), []string{server.URL + "/static/js/main.b0f8bbd9.js"})
+	sort.Strings(got)
+	want := []string{
+		server.URL + "/static/js/314.44444444.chunk.js",
+		server.URL + "/static/js/628.55555555.chunk.js",
+	}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected nested JS asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestNormalizeDiscoveredAssetURLRepairsEncodedBackslashHostPath(t *testing.T) {
+	got := normalizeDiscoveredAssetURL(`https://app.example.test:443/%5C%5C%5C/app.example.test%5C%5C%5C/build%5C%5C%5C/assets%5C%5C%5C/locale-a1b2c3d4.js`)
+	want := "https://app.example.test/build/assets/locale-a1b2c3d4.js"
+
+	if got != want {
+		t.Fatalf("unexpected normalized URL:\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestExtractJSAssetURLsRepairsEscapedHostPathAndSkipsProse(t *testing.T) {
+	base, err := url.Parse("https://app.example.test/assets/js/library.min.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`const files=["\\\/app.example.test\\\/build\\\/assets\\\/locale-a1b2c3d4.js","Widget requires helper.js","\\/build\\/assets\\/real.js"];`)
+
+	got := extractJSAssetURLs(base, body, []string{"js", "json"})
+	sort.Strings(got)
+	want := []string{
+		"https://app.example.test/build/assets/locale-a1b2c3d4.js",
+		"https://app.example.test/build/assets/real.js",
+	}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected JS asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestExtractJSAssetURLsRepairsDuplicatedRelativeAssetDirAndSkipsTemplates(t *testing.T) {
+	base, err := url.Parse("https://app.example.test/build/assets/app-a1b2c3d4.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`const files=["assets/vendor_framework-b2c3d4e5.js","/lang/${p}.json","${e}/data.json"];`)
+
+	got := extractJSAssetURLs(base, body, []string{"js", "json"})
+	want := []string{"https://app.example.test/build/assets/vendor_framework-b2c3d4e5.js"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected JS asset URLs:\n got: %#v\nwant: %#v", got, want)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,15 @@ import (
 	gologgerwriter "github.com/projectdiscovery/gologger/writer"
 
 	"github.com/dinosn/leaklens/pkg/types"
+)
+
+const maxNestedJSAssetDiscovery = 1000
+
+var (
+	quotedJSAssetPattern       = regexp.MustCompile(`["'\x60]([^"'\x60]+?\.(?:js|json)(?:\?[^"'\x60]*)?)["'\x60]`)
+	webpackChunkMapPattern     = regexp.MustCompile(`["']([^"']*)["']\s*\+\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\+\s*["']([^"']*)["']\s*\+\s*\{([^{}]+)\}\[[^\]]+\]\s*\+\s*["']([^"']*\.js)["']`)
+	webpackChunkMapEntryRegexp = regexp.MustCompile(`(\d+):["']([A-Za-z0-9]+)["']`)
+	webpackPublicPathPattern   = regexp.MustCompile(`\.p\s*=\s*["']([^"']*)["']`)
 )
 
 // CrawlEnumerator crawls a target URL and enumerates discovered files for scanning.
@@ -166,6 +176,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		if rawURL == "" {
 			return
 		}
+		rawURL = normalizeDiscoveredAssetURL(rawURL)
 		if !e.urlInScope(rawURL) {
 			return
 		}
@@ -300,12 +311,6 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 
 	err, timedOut := e.runCrawlWithDeadline(ctx, engine, closeEngine)
 
-	mu.Lock()
-	acceptingResults.Store(false)
-	finalURLs := append([]string(nil), discoveredURLs...)
-	finalCandidates := append([][]string(nil), discoveredCandidates...)
-	mu.Unlock()
-
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -322,6 +327,21 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		// with whatever URLs were discovered before the error.
 		warnf("Crawl stopped: timeout %s reached\n", e.Timeout)
 	}
+
+	if e.JSCrawl {
+		mu.Lock()
+		seedURLs := append([]string(nil), discoveredURLs...)
+		mu.Unlock()
+		for _, rawURL := range e.discoverNestedJSAssetURLs(ctx, seedURLs) {
+			addDiscoveredURL(rawURL)
+		}
+	}
+
+	mu.Lock()
+	acceptingResults.Store(false)
+	finalURLs := append([]string(nil), discoveredURLs...)
+	finalCandidates := append([][]string(nil), discoveredCandidates...)
+	mu.Unlock()
 
 	if len(finalURLs) == 0 {
 		warnf("Crawl complete: no matching files found\n")
@@ -453,6 +473,275 @@ func extractImportMapAssetURLs(base *url.URL, data string, extensions []string) 
 		}
 	}
 	return uniqueStrings(urls)
+}
+
+func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURLs []string) []string {
+	if len(seedURLs) == 0 {
+		return nil
+	}
+	timeout := 30 * time.Second
+	if e.Timeout > 0 && e.Timeout < timeout {
+		timeout = e.Timeout
+	}
+	client := newTLSFallbackHTTPClient(timeout)
+	queued := make(map[string]bool)
+	seenAsset := make(map[string]bool)
+	queue := make([]string, 0, len(seedURLs))
+	for _, rawURL := range seedURLs {
+		seenAsset[rawURL] = true
+		if isJavaScriptURL(rawURL) {
+			queued[rawURL] = true
+			queue = append(queue, rawURL)
+		}
+	}
+
+	var discovered []string
+	for len(queue) > 0 && len(discovered) < maxNestedJSAssetDiscovery {
+		if ctx.Err() != nil {
+			return discovered
+		}
+		current := queue[0]
+		queue = queue[1:]
+		body, responseURL, err := fetchJSAssetForDiscovery(ctx, client, current, e.MaxSize)
+		if err != nil {
+			continue
+		}
+		for _, rawURL := range extractJSAssetURLs(responseURL, body, e.Extensions) {
+			if len(discovered) >= maxNestedJSAssetDiscovery {
+				break
+			}
+			if !e.urlInScope(rawURL) || !urlMatchesExtensions(rawURL, e.Extensions) {
+				continue
+			}
+			if seenAsset[rawURL] {
+				continue
+			}
+			seenAsset[rawURL] = true
+			discovered = append(discovered, rawURL)
+			if isJavaScriptURL(rawURL) && !queued[rawURL] {
+				queued[rawURL] = true
+				queue = append(queue, rawURL)
+			}
+		}
+	}
+	return discovered
+}
+
+func fetchJSAssetForDiscovery(ctx context.Context, client *http.Client, rawURL string, maxSize int64) ([]byte, *url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Accept", "application/javascript,text/javascript,*/*")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	reader := io.LimitReader(resp.Body, maxSize+1)
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	if int64(len(body)) > maxSize {
+		return nil, nil, fmt.Errorf("JS asset too large")
+	}
+	return body, resp.Request.URL, nil
+}
+
+func extractJSAssetURLs(base *url.URL, body []byte, extensions []string) []string {
+	var urls []string
+	text := string(body)
+	publicPath := extractWebpackPublicPath(text)
+	for _, match := range quotedJSAssetPattern.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 {
+			addResolvedJSAssetURL(&urls, base, publicPath, match[1], extensions)
+		}
+	}
+	for _, match := range webpackChunkMapPattern.FindAllStringSubmatch(text, -1) {
+		if len(match) < 5 {
+			continue
+		}
+		prefix, separator, entries, suffix := match[1], match[2], match[3], match[4]
+		for _, entry := range webpackChunkMapEntryRegexp.FindAllStringSubmatch(entries, -1) {
+			if len(entry) < 3 {
+				continue
+			}
+			addResolvedJSAssetURL(&urls, base, publicPath, prefix+entry[1]+separator+entry[2]+suffix, extensions)
+		}
+	}
+	return uniqueStrings(urls)
+}
+
+func extractWebpackPublicPath(text string) string {
+	matches := webpackPublicPathPattern.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 || len(matches[len(matches)-1]) < 2 {
+		return ""
+	}
+	return matches[len(matches)-1][1]
+}
+
+func addResolvedJSAssetURL(out *[]string, base *url.URL, publicPath, raw string, extensions []string) {
+	var ok bool
+	raw, ok = normalizeJSAssetLiteral(base, raw)
+	if !ok {
+		return
+	}
+	if strings.HasPrefix(raw, "/") || hasURLScheme(raw) {
+		addResolvedAssetURL(out, base, raw, extensions)
+		return
+	}
+	if strings.TrimSpace(publicPath) != "" {
+		addResolvedAssetURL(out, base, joinPublicPath(publicPath, raw), extensions)
+		if strings.HasPrefix(raw, "static/") {
+			addResolvedAssetURL(out, base, "/"+raw, extensions)
+		}
+		return
+	}
+	if repaired, ok := repairDuplicatedRelativeAssetDir(base, raw); ok {
+		addResolvedAssetURL(out, base, repaired, extensions)
+		return
+	}
+	addResolvedAssetURL(out, base, raw, extensions)
+	if !strings.HasPrefix(raw, "/") && strings.HasPrefix(raw, "static/") {
+		addResolvedAssetURL(out, base, "/"+raw, extensions)
+	}
+}
+
+func normalizeJSAssetLiteral(base *url.URL, raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.ContainsAny(raw, " \t\r\n") {
+		return "", false
+	}
+	raw = strings.NewReplacer(`\/`, `/`, `\u002f`, `/`, `\u002F`, `/`).Replace(raw)
+	if strings.Contains(raw, "${") || strings.ContainsAny(raw, "{}") {
+		return "", false
+	}
+	if strings.Contains(raw, `\`) {
+		if !strings.HasPrefix(raw, `\`) && !strings.HasPrefix(raw, "/") {
+			return "", false
+		}
+		host := ""
+		if base != nil {
+			host = base.Hostname()
+		}
+		raw = cleanBackslashAssetPath(raw, host)
+	}
+	if raw == "" || (strings.HasPrefix(raw, ".") && !strings.HasPrefix(raw, "./") && !strings.HasPrefix(raw, "../")) {
+		return "", false
+	}
+	return raw, true
+}
+
+func repairDuplicatedRelativeAssetDir(base *url.URL, raw string) (string, bool) {
+	if base == nil || strings.HasPrefix(raw, ".") {
+		return "", false
+	}
+	rawSegments := splitPathSegments(raw)
+	baseSegments := baseDirSegments(base.Path)
+	if len(rawSegments) == 0 || len(baseSegments) == 0 {
+		return "", false
+	}
+	if rawSegments[0] != baseSegments[len(baseSegments)-1] {
+		return "", false
+	}
+	repairedSegments := appendSegments(baseSegments[:len(baseSegments)-1], rawSegments...)
+	return "/" + strings.Join(repairedSegments, "/"), true
+}
+
+func normalizeDiscoveredAssetURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return rawURL
+	}
+	decodedPath, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil {
+		decodedPath = parsed.Path
+	}
+	if !strings.Contains(decodedPath, `\`) {
+		return rawURL
+	}
+	parsed.Path = cleanBackslashAssetPath(decodedPath, parsed.Hostname())
+	parsed.RawPath = ""
+	if (parsed.Scheme == "https" && parsed.Port() == "443") || (parsed.Scheme == "http" && parsed.Port() == "80") {
+		hostname := parsed.Hostname()
+		if !strings.Contains(hostname, ":") {
+			parsed.Host = hostname
+		}
+	}
+	return parsed.String()
+}
+
+func cleanBackslashAssetPath(raw, host string) string {
+	cleaned := strings.ReplaceAll(raw, `\`, "")
+	cleaned = collapseSlashes(cleaned)
+	if host != "" {
+		cleaned = dropLeadingHostPathSegment(cleaned, host)
+	}
+	return cleaned
+}
+
+func dropLeadingHostPathSegment(rawPath, host string) string {
+	segments := splitPathSegments(rawPath)
+	if len(segments) == 0 || !strings.EqualFold(segments[0], host) {
+		return rawPath
+	}
+	if len(segments) == 1 {
+		return "/"
+	}
+	return "/" + strings.Join(segments[1:], "/")
+}
+
+func collapseSlashes(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	previousSlash := false
+	for _, r := range value {
+		if r == '/' {
+			if !previousSlash {
+				b.WriteRune(r)
+			}
+			previousSlash = true
+			continue
+		}
+		previousSlash = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func hasURLScheme(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme != ""
+}
+
+func joinPublicPath(publicPath, raw string) string {
+	if publicPath == "" {
+		return raw
+	}
+	if strings.HasSuffix(publicPath, "/") {
+		return publicPath + strings.TrimLeft(raw, "/")
+	}
+	return publicPath + "/" + strings.TrimLeft(raw, "/")
+}
+
+func isJavaScriptURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(path.Ext(parsed.Path)) {
+	case ".js", ".mjs", ".cjs":
+		return true
+	default:
+		return false
+	}
 }
 
 func addResolvedAssetURL(out *[]string, base *url.URL, raw string, extensions []string) {
