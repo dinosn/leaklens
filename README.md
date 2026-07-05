@@ -12,7 +12,7 @@ Use LeakLens only on codebases, repositories, and websites you are authorized to
 
 - CLI scanning for files, directories, Git repositories, direct URLs, and crawled websites.
 - Secret detection with optional live validation.
-- Katana-based web crawling with LeakLens-specific JS/JSON discovery and URL repair.
+- Katana-based web crawling with LeakLens-specific JS/JSON/source-map discovery and URL repair.
 - URL repair for same-host JS paths that are resolved too deeply by crawlers.
 - JS intelligence for endpoints, source maps, cloud URLs, subdomains, dependencies, and opt-in dependency-confusion checks.
 - Go library usage for embedding the scanner in other internal tools.
@@ -151,17 +151,17 @@ leaklens scan https://example.com/static/app.js
 # Scan URLs from a file
 leaklens scan --url-file urls.txt
 
-# Crawl a website and scan discovered JS/JSON files
+# Crawl a website and scan discovered JS/JSON/source-map files
 leaklens scan --crawl https://example.com
 
-# Crawl with JS intelligence and source-map rescanning
+# Crawl with JS intelligence
 leaklens scan --crawl --js-intel https://example.com
 
 # Validate detected secrets against provider APIs
 leaklens scan path/to/source --validate
 ```
 
-By default, scan results are printed in human format and stored in `leaklens.ds`. Use `--output :memory:` when you do not want a datastore.
+By default, scan results are printed in human format and kept in memory. Use `--output leaklens.ds` or another path when you want a datastore for later reporting.
 
 ## Website Testing
 
@@ -179,7 +179,7 @@ This default profile enables:
 - `--crawl-concurrency=2`
 - `--crawl-rate-limit=3`
 - `--crawl-timeout=2m`
-- `--crawl-extensions=js,json`
+- `--crawl-extensions=js,json,map`
 - `--crawl-scope=rdn`
 
 To save crawled files as a readable website-style directory tree while scanning:
@@ -228,7 +228,7 @@ This layer reports supporting artifacts. It does not replace the normal LeakLens
 | Cloud URLs | Finds common S3, GCS, Azure Blob, and DigitalOcean Spaces URLs. |
 | Subdomains | Extracts domain-like hostnames from JS/JSON content. |
 | Dependencies | Extracts package names from `package.json`, lockfile package paths, imports, requires, and `node_modules` references. |
-| Source maps | Detects external source-map references and decodes inline source maps. Embedded `sourcesContent` files are rescanned with normal LeakLens rules. |
+| Source maps | Crawl mode discovers external `.map` files and probes sibling `.js.map` files for discovered JavaScript assets. Standalone map files and embedded `sourcesContent` entries are rescanned with normal LeakLens rules. JS intelligence also decodes inline source maps when enabled. |
 | Generic secret heuristic | Optional low-confidence JS assignment heuristic. Values are masked in JS-intel output. |
 | Dependency-confusion candidate | Optional active npm registry check. Reports packages that return `404` from the configured registry. |
 
@@ -265,7 +265,7 @@ Targets can be:
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--output` | `leaklens.ds` | Output datastore path. Use `:memory:` for in-memory only. |
+| `--output` | `:memory:` | Output datastore path. Use a path such as `leaklens.ds` when you want a persistent datastore. |
 | `--format` | `human` | Output format: `human`, `json`, or `sarif`. |
 | `--rules` | | Path to a custom rule file or directory. |
 | `--rules-include` | | Include rules matching regex patterns, comma-separated. |
@@ -304,7 +304,7 @@ Targets can be:
 | `--crawl-timeout` | `2m` | Maximum crawl duration. |
 | `--crawl-headless` | `false` | Use a headless browser for JS-heavy sites. |
 | `--crawl-js-crawl` | `true` | Parse JavaScript files for additional endpoints. |
-| `--crawl-extensions` | `js,json` | File extensions to collect and scan. |
+| `--crawl-extensions` | `js,json,map` | File extensions to collect and scan. |
 | `--crawl-scope` | `rdn` | Scope: `rdn`, `dn`, or `fqdn`. |
 | `--crawl-base-url` | | Application base URL for repairing JS-discovered relative paths. |
 | `--crawl-max-domain-pages` | `0` | Maximum pages to crawl per domain. `0` is unlimited. |
@@ -358,7 +358,7 @@ AI flags:
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--ai` | `false` | Run AI-assisted JS/JSON analysis after scanning. |
+| `--ai` | `false` | Run AI-assisted JS/JSON/source-map analysis after scanning. |
 | `--ai-mode` | `all` | AI analysis mode: `secrets`, `appsec`, or `all`. |
 | `--ai-report-dir` | | Directory for AI artifacts. Default: `leaklens-ai/<target>-<timestamp>`. |
 | `--ai-cloud-redaction` | `standard` | Cloud redaction mode: `standard` or `expanded`. Target URLs and hostnames are always redacted in both modes. |
@@ -438,10 +438,10 @@ Important flags:
 
 ## Reports and Exploration
 
-Scan results are stored in a datastore unless `--output :memory:` is used.
+Scan results are kept in memory unless `--output` is set to a datastore path.
 
 ```bash
-# Human report from default datastore
+# Human report from leaklens.ds
 leaklens report
 
 # JSON report

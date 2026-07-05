@@ -16,14 +16,14 @@ func TestScanCommand_Exists(t *testing.T) {
 	assert.Equal(t, "scan", cmd.Name())
 }
 
-func TestScanCommand_DefaultOutputIsDatastore(t *testing.T) {
+func TestScanCommand_DefaultOutputIsMemory(t *testing.T) {
 	cmd, _, err := rootCmd.Find([]string{"scan"})
 	require.NoError(t, err)
 
 	flag := cmd.Flags().Lookup("output")
 	require.NotNil(t, flag, "--output flag should exist")
-	assert.Equal(t, "leaklens.ds", flag.DefValue,
-		"default --output should be leaklens.ds datastore directory")
+	assert.Equal(t, ":memory:", flag.DefValue,
+		"default --output should use an in-memory datastore")
 }
 
 func TestScanCommand_DefaultCrawlUsesStandardCrawler(t *testing.T) {
@@ -36,6 +36,16 @@ func TestScanCommand_DefaultCrawlUsesStandardCrawler(t *testing.T) {
 		"default --crawl should use the standard crawler and avoid launching Chrome")
 }
 
+func TestScanCommand_DefaultCrawlExtensionsIncludeSourceMaps(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"scan"})
+	require.NoError(t, err)
+
+	flag := cmd.Flags().Lookup("crawl-extensions")
+	require.NotNil(t, flag, "--crawl-extensions flag should exist")
+	assert.Equal(t, "js,json,map", flag.DefValue,
+		"default crawl extensions should include source maps")
+}
+
 func TestScanCommand_DownloadDirFlagExists(t *testing.T) {
 	cmd, _, err := rootCmd.Find([]string{"scan"})
 	require.NoError(t, err)
@@ -43,6 +53,27 @@ func TestScanCommand_DownloadDirFlagExists(t *testing.T) {
 	flag := cmd.Flags().Lookup("download-dir")
 	require.NotNil(t, flag, "--download-dir flag should exist")
 	assert.Contains(t, flag.Usage, "preserving website path structure")
+}
+
+func TestExtractStandaloneSourceMapSources(t *testing.T) {
+	content := []byte(`{
+		"version": 3,
+		"sources": ["webpack://app/src/main.js", "webpack://app/src/empty.js", "webpack://app/src/config.js"],
+		"sourcesContent": ["const apiKey = \"example-key\";", null, "const mode = \"test\";"]
+	}`)
+
+	got, err := extractStandaloneSourceMapSources(content)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "webpack://app/src/main.js", got[0].Path)
+	assert.Equal(t, []byte(`const apiKey = "example-key";`), got[0].Content)
+	assert.Equal(t, "webpack://app/src/config.js", got[1].Path)
+	assert.Equal(t, []byte(`const mode = "test";`), got[1].Content)
+}
+
+func TestIsSourceMapBlobPath(t *testing.T) {
+	assert.True(t, isSourceMapBlobPath("https://app.example.test/static/js/app.11111111.js.map?cache=1"))
+	assert.False(t, isSourceMapBlobPath("https://app.example.test/static/js/app.11111111.js"))
 }
 
 func TestScanCommand_HelpDoesNotMentionKatana(t *testing.T) {

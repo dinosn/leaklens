@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -40,7 +41,7 @@ const (
 	defaultCrawlConcurrency = 2
 	defaultCrawlRateLimit   = 3
 	defaultCrawlTimeout     = "2m"
-	defaultCrawlExtensions  = "js,json"
+	defaultCrawlExtensions  = "js,json,map"
 	defaultCrawlScope       = "rdn"
 )
 
@@ -120,7 +121,7 @@ var scanCmd = &cobra.Command{
 	Long: `Scan a file, directory, git repository, HTTP(S) URL, or remote GitHub/GitLab repository for secrets using detection rules.
 Supports github.com/org/repo and gitlab.com/namespace/project URLs for direct remote scanning.
 HTTP(S) URLs are downloaded and scanned directly. Use --url-file to scan a list of URLs from a file (use - for stdin).
-Use --crawl with a URL target to spider the site and scan discovered files (JS and JSON by default).`,
+Use --crawl with a URL target to spider the site and scan discovered files (JS, JSON, and source maps by default).`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: runScan,
 }
@@ -129,7 +130,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanRulesPath, "rules", "", "Path to custom rules file or directory")
 	scanCmd.Flags().StringVar(&scanRulesInclude, "rules-include", "", "Include rules matching regex pattern (comma-separated)")
 	scanCmd.Flags().StringVar(&scanRulesExclude, "rules-exclude", "", "Exclude rules matching regex pattern (comma-separated)")
-	scanCmd.Flags().StringVar(&scanOutputPath, "output", "leaklens.ds", "Output datastore path (use :memory: for in-memory only)")
+	scanCmd.Flags().StringVar(&scanOutputPath, "output", ":memory:", "Output datastore path (:memory: for in-memory only)")
 	scanCmd.Flags().StringVar(&scanOutputFormat, "format", "human", "Output format: json, sarif, human")
 	scanCmd.Flags().BoolVar(&scanGit, "git", false, "Treat target as git repository (enumerate git history)")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Maximum file size to scan (bytes)")
@@ -174,7 +175,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanJSIntelGeneric, "js-intel-generic-secrets", false, "Enable low-confidence JS-style generic secret heuristics")
 	scanCmd.Flags().BoolVar(&scanJSIntelNPMCheck, "js-intel-npm-check", false, "Actively check discovered npm packages for public-registry misses")
 
-	scanCmd.Flags().BoolVar(&scanAI, "ai", false, "Run AI-assisted JS/JSON analysis after scanning")
+	scanCmd.Flags().BoolVar(&scanAI, "ai", false, "Run AI-assisted JS/JSON/source-map analysis after scanning")
 	scanCmd.Flags().StringVar(&scanAIMode, "ai-mode", "all", "AI analysis mode: secrets, appsec, or all")
 	scanCmd.Flags().StringVar(&scanAIReportDir, "ai-report-dir", "", "Directory for AI Markdown, manifest, progress, and redaction artifacts")
 	scanCmd.Flags().StringVar(&scanAICloudRedaction, "ai-cloud-redaction", "standard", "Cloud redaction mode: standard or expanded; target URLs and hosts are always redacted")
@@ -778,6 +779,27 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 		return enumerator.Enumerate(workerCtx, func(content []byte, blobID types.BlobID, prov types.Provenance) error {
 			if err := enqueue(content, blobID, prov); err != nil {
 				return err
+			}
+
+			if isSourceMapBlobPath(prov.Path()) {
+				sources, err := extractStandaloneSourceMapSources(content)
+				if err != nil {
+					if !quiet {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: source-map parse failed for %s: %v\n", prov.Path(), err)
+					}
+				}
+				for _, source := range sources {
+					if int64(len(source.Content)) > scanMaxFileSize {
+						if !quiet {
+							fmt.Fprintf(cmd.ErrOrStderr(), "warning: source-map source too large, skipping: %s\n", source.Path)
+						}
+						continue
+					}
+					derivedProv := sourceMapProvenance(prov.Path(), source.Path)
+					if err := enqueue(source.Content, types.ComputeBlobID(source.Content), derivedProv); err != nil {
+						return err
+					}
+				}
 			}
 
 			if jsAnalyzer == nil {
@@ -1414,6 +1436,52 @@ func sourceMapProvenance(parentPath, sourcePath string) types.Provenance {
 			"member": sourcePath,
 		},
 	}
+}
+
+type sourceMapEmbeddedSource struct {
+	Path    string
+	Content []byte
+}
+
+type standaloneSourceMap struct {
+	Sources        []string  `json:"sources"`
+	SourcesContent []*string `json:"sourcesContent"`
+}
+
+func isSourceMapBlobPath(rawPath string) bool {
+	if rawPath == "" {
+		return false
+	}
+	if parsed, err := url.Parse(rawPath); err == nil && parsed.Path != "" {
+		rawPath = parsed.Path
+	}
+	return strings.EqualFold(path.Ext(rawPath), ".map")
+}
+
+func extractStandaloneSourceMapSources(content []byte) ([]sourceMapEmbeddedSource, error) {
+	var sm standaloneSourceMap
+	if err := json.Unmarshal(content, &sm); err != nil {
+		return nil, err
+	}
+	if len(sm.SourcesContent) == 0 {
+		return nil, nil
+	}
+
+	sources := make([]sourceMapEmbeddedSource, 0, len(sm.SourcesContent))
+	for i, sourceContent := range sm.SourcesContent {
+		if sourceContent == nil || *sourceContent == "" {
+			continue
+		}
+		sourcePath := fmt.Sprintf("source-%d.js", i+1)
+		if i < len(sm.Sources) && strings.TrimSpace(sm.Sources[i]) != "" {
+			sourcePath = sm.Sources[i]
+		}
+		sources = append(sources, sourceMapEmbeddedSource{
+			Path:    sourcePath,
+			Content: []byte(*sourceContent),
+		})
+	}
+	return sources, nil
 }
 
 // outputScanSummary prints a compact summary after inline reporting.

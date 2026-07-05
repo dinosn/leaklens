@@ -195,6 +195,15 @@ func TestCrawlInitialHTMLAssetDiscoveryRetriesCertificateVerificationFailure(t *
 	}
 }
 
+func TestNewCrawlEnumeratorDefaultExtensionsIncludeSourceMaps(t *testing.T) {
+	enumerator := NewCrawlEnumerator(CrawlConfig{TargetURL: "https://app.example.test/"})
+	want := []string{"js", "json", "map"}
+
+	if !reflect.DeepEqual(enumerator.Extensions, want) {
+		t.Fatalf("unexpected default crawl extensions:\n got: %#v\nwant: %#v", enumerator.Extensions, want)
+	}
+}
+
 func TestExtractJSAssetURLsFindsWebpackRuntimeChunks(t *testing.T) {
 	base, err := url.Parse("https://app.example.test/static/js/main.11111111.js")
 	if err != nil {
@@ -212,6 +221,47 @@ func TestExtractJSAssetURLsFindsWebpackRuntimeChunks(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected JS asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestExtractJSAssetURLsFindsExternalSourceMapReference(t *testing.T) {
+	base, err := url.Parse("https://app.example.test/static/js/app.11111111.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("console.log('app');\n//# sourceMappingURL=app.11111111.js.map")
+
+	got := extractJSAssetURLs(base, body, []string{"js", "json", "map"})
+	want := []string{"https://app.example.test/static/js/app.11111111.js.map"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected JS asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestDiscoverSourceMapAssetURLsProbesSiblingMap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/static/js/app.11111111.js.map":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"version":3,"sources":["src/app.js"],"sourcesContent":["const key = \"test\";"]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL + "/",
+		Extensions: []string{"js", "json", "map"},
+		Scope:      "fqdn",
+	})
+
+	got := enumerator.discoverSourceMapAssetURLs(context.Background(), []string{server.URL + "/static/js/app.11111111.js"})
+	want := []string{server.URL + "/static/js/app.11111111.js.map"}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected source map URLs:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

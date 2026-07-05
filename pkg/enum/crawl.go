@@ -34,10 +34,11 @@ import (
 const maxNestedJSAssetDiscovery = 1000
 
 var (
-	quotedJSAssetPattern       = regexp.MustCompile(`["'\x60]([^"'\x60]+?\.(?:js|json)(?:\?[^"'\x60]*)?)["'\x60]`)
+	quotedJSAssetPattern       = regexp.MustCompile(`["'\x60]([^"'\x60]+?\.(?:js|json|map)(?:\?[^"'\x60]*)?)["'\x60]`)
 	webpackChunkMapPattern     = regexp.MustCompile(`["']([^"']*)["']\s*\+\s*[A-Za-z_$][A-Za-z0-9_$]*\s*\+\s*["']([^"']*)["']\s*\+\s*\{([^{}]+)\}\[[^\]]+\]\s*\+\s*["']([^"']*\.js)["']`)
 	webpackChunkMapEntryRegexp = regexp.MustCompile(`(\d+):["']([A-Za-z0-9]+)["']`)
 	webpackPublicPathPattern   = regexp.MustCompile(`\.p\s*=\s*["']([^"']*)["']`)
+	sourceMappingURLPattern    = regexp.MustCompile(`(?m)(?://[#@]|/\*[#@])\s*sourceMappingURL=([^\s*]+)`)
 )
 
 // CrawlEnumerator crawls a target URL and enumerates discovered files for scanning.
@@ -103,7 +104,7 @@ func NewCrawlEnumerator(cfg CrawlConfig) *CrawlEnumerator {
 		cfg.Scope = "rdn"
 	}
 	if len(cfg.Extensions) == 0 {
-		cfg.Extensions = []string{"js", "json"}
+		cfg.Extensions = []string{"js", "json", "map"}
 	}
 	if cfg.MaxSize <= 0 {
 		cfg.MaxSize = 10 * 1024 * 1024
@@ -336,6 +337,14 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			addDiscoveredURL(rawURL)
 		}
 	}
+	if extensionEnabled(e.Extensions, "map") {
+		mu.Lock()
+		seedURLs := append([]string(nil), discoveredURLs...)
+		mu.Unlock()
+		for _, rawURL := range e.discoverSourceMapAssetURLs(ctx, seedURLs) {
+			addDiscoveredURL(rawURL)
+		}
+	}
 
 	mu.Lock()
 	acceptingResults.Store(false)
@@ -527,6 +536,41 @@ func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURL
 	return discovered
 }
 
+func (e *CrawlEnumerator) discoverSourceMapAssetURLs(ctx context.Context, seedURLs []string) []string {
+	if len(seedURLs) == 0 {
+		return nil
+	}
+	timeout := 30 * time.Second
+	if e.Timeout > 0 && e.Timeout < timeout {
+		timeout = e.Timeout
+	}
+	client := newTLSFallbackHTTPClient(timeout)
+	seen := make(map[string]struct{})
+	var discovered []string
+	for _, rawURL := range seedURLs {
+		if ctx.Err() != nil {
+			return discovered
+		}
+		if !isJavaScriptURL(rawURL) {
+			continue
+		}
+		for _, candidate := range sourceMapURLCandidates(rawURL) {
+			candidate = normalizeDiscoveredAssetURL(candidate)
+			if !e.urlInScope(candidate) || !urlMatchesExtensions(candidate, e.Extensions) {
+				continue
+			}
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			if sourceMapURLExists(ctx, client, candidate) {
+				discovered = append(discovered, candidate)
+			}
+		}
+	}
+	return discovered
+}
+
 func fetchJSAssetForDiscovery(ctx context.Context, client *http.Client, rawURL string, maxSize int64) ([]byte, *url.URL, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -556,6 +600,11 @@ func extractJSAssetURLs(base *url.URL, body []byte, extensions []string) []strin
 	var urls []string
 	text := string(body)
 	publicPath := extractWebpackPublicPath(text)
+	for _, match := range sourceMappingURLPattern.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 {
+			addResolvedJSAssetURL(&urls, base, publicPath, match[1], extensions)
+		}
+	}
 	for _, match := range quotedJSAssetPattern.FindAllStringSubmatch(text, -1) {
 		if len(match) > 1 {
 			addResolvedJSAssetURL(&urls, base, publicPath, match[1], extensions)
@@ -742,6 +791,76 @@ func isJavaScriptURL(rawURL string) bool {
 	default:
 		return false
 	}
+}
+
+func sourceMapURLCandidates(rawURL string) []string {
+	if !isJavaScriptURL(rawURL) {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil
+	}
+	parsed.Fragment = ""
+	originalQuery := parsed.RawQuery
+	parsed.RawQuery = ""
+	parsed.Path += ".map"
+	candidates := []string{parsed.String()}
+	if originalQuery != "" {
+		parsed.RawQuery = originalQuery
+		candidates = append(candidates, parsed.String())
+	}
+	return uniqueStrings(candidates)
+}
+
+func sourceMapURLExists(ctx context.Context, client *http.Client, rawURL string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "application/json,application/source-map,*/*")
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		if sourceMapResponseOK(resp) {
+			return true
+		}
+		if resp.StatusCode != http.StatusMethodNotAllowed && resp.StatusCode != http.StatusForbidden {
+			return false
+		}
+	}
+
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "application/json,application/source-map,*/*")
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err = client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.CopyN(io.Discard, resp.Body, 1)
+	return sourceMapResponseOK(resp)
+}
+
+func sourceMapResponseOK(resp *http.Response) bool {
+	if resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	return !strings.Contains(contentType, "text/html")
+}
+
+func extensionEnabled(extensions []string, ext string) bool {
+	ext = strings.TrimPrefix(strings.ToLower(ext), ".")
+	for _, value := range extensions {
+		if strings.TrimPrefix(strings.ToLower(value), ".") == ext {
+			return true
+		}
+	}
+	return false
 }
 
 func addResolvedAssetURL(out *[]string, base *url.URL, raw string, extensions []string) {

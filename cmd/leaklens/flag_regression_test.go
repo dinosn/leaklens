@@ -229,6 +229,34 @@ func TestRunEnumeratorScan_StoreBlobsWritesContent(t *testing.T) {
 	}
 }
 
+func TestRunEnumeratorScan_ParsesStandaloneSourceMapSources(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+
+	content := []byte(`{
+		"version": 3,
+		"sources": ["webpack://app/src/config.js"],
+		"sourcesContent": ["const token = \"testsecret_\u0041BC123\";"]
+	}`)
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	err := runEnumeratorScan(cmd, oneURLBlobEnumerator{
+		content: content,
+		rawURL:  "https://app.example.test/static/js/app.11111111.js.map",
+	})
+	if err != nil {
+		t.Fatalf("runEnumeratorScan failed: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "source-map/webpack://app/src/config.js") {
+		t.Fatalf("expected source-map-derived provenance in output, got %s", out.String())
+	}
+	if !strings.Contains(out.String(), "testsecret_ABC123") {
+		t.Fatalf("expected source-map-derived secret in output, got %s", out.String())
+	}
+}
+
 func TestRunEnumeratorScan_DownloadDirMirrorsURLPath(t *testing.T) {
 	rulePath := writeRegressionRule(t)
 	outputPath := filepath.Join(t.TempDir(), "out.ds")
