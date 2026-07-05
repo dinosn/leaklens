@@ -39,6 +39,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "minified AES length guard",
+			content: `function encrypt(e){const n="a1bcdefghijklmno";if(!n||16!==n.length)return console.error("AES key must be 16 bytes"),"";const r=CryptoJS.enc.Utf8.parse(n);return CryptoJS.AES.encrypt(e,r).toString()}`,
+			want:    true,
+		},
+		{
 			name:    "semantic crypto object property",
 			content: `{"cryptoSecret": "a1bcdefghijklmno"}`,
 			want:    true,
@@ -56,6 +61,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "generic access key does not imply AES",
 			content: `const accessKey = "a1bcdefghijklmno";`,
+			want:    false,
+		},
+		{
+			name:    "minified non-crypto length guard",
+			content: `function normalize(e){const n="a1bcdefghijklmno";if(!n||16!==n.length)return "";return n.toLowerCase()}`,
 			want:    false,
 		},
 		{

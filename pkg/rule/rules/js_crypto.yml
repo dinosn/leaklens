@@ -17,6 +17,25 @@ rules:
         )
         ["']
       |
+        (?:var|let|const) \s+
+        (?P<minified_key_name>[A-Za-z_$][\w$]{0,2})
+        \s* = \s*
+        ["']
+        (?P<minified_crypto_key>
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*[0-9])
+          (?:[^\s"'\\]{16}|[^\s"'\\]{24}|[^\s"'\\]{32})
+        )
+        ["']
+        \s* ;? \s*
+        if \s* \( \s* ! \s* \k<minified_key_name> \s* \|\| \s*
+        (?:
+          16 \s* !== \s* \k<minified_key_name> \. length
+          |
+          \k<minified_key_name> \. length \s* !== \s* 16
+        )
+        (?=[\s\S]{0,600}(?:AES|CryptoJS|enc\s*\.\s*Utf8|Utf8\s*\.\s*parse))
+      |
         (?P<crypto_key_name>
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
           |
@@ -44,14 +63,17 @@ rules:
       - 'var g_ac = "A1!bcdefghijklmn";'
       - 'const aesKey = "a1bcdefghijklmno";'
       - 'const secretKey = "a1bcdefghijklmno";'
+      - 'const n="a1bcdefghijklmno";if(!n||16!==n.length)return console.error("AES key must be 16 bytes"),"";const r=CryptoJS.enc.Utf8.parse(n);'
       - '{"cryptoSecret": "a1bcdefghijklmno"}'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'
       - 'var displayName = "A1!bcdefghijklmn";'
       - 'const aesKey = "short";'
       - 'const accessKey = "a1bcdefghijklmno";'
+      - 'const n="a1bcdefghijklmno";if(!n||16!==n.length)return "";return n.toLowerCase();'
     description: >
       A fixed-width client-side cryptographic key candidate was found in
-      JavaScript. The detector covers semantic AES/crypto/cipher key names and
-      the observed g_ac client-side AES key convention while avoiding generic
-      16-character string matches.
+      JavaScript. The detector covers semantic AES/crypto/cipher key names,
+      narrow minified AES length-guard patterns, and the observed g_ac
+      client-side AES key convention while avoiding generic 16-character string
+      matches.
