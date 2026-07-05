@@ -24,8 +24,18 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "observed g_ac alphanumeric convention",
+			content: `var g_ac = "A1bcdefghijklmno";`,
+			want:    true,
+		},
+		{
 			name:    "semantic aes key",
 			content: `const aesKey = "a1bcdefghijklmno";`,
+			want:    true,
+		},
+		{
+			name:    "semantic secret key",
+			content: `const secretKey = "a1bcdefghijklmno";`,
 			want:    true,
 		},
 		{

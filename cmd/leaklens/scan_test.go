@@ -71,9 +71,47 @@ func TestExtractStandaloneSourceMapSources(t *testing.T) {
 	assert.Equal(t, []byte(`const mode = "test";`), got[1].Content)
 }
 
+func TestExtractStandaloneSourceMapSourcesIndexedSections(t *testing.T) {
+	content := []byte(`{
+		"version": 3,
+		"sections": [
+			{
+				"offset": {"line": 0, "column": 0},
+				"map": {
+					"version": 3,
+					"sources": ["webpack://app/src/section-a.js"],
+					"sourcesContent": ["const aesKey = \"a1bcdefghijklmno\";"]
+				}
+			},
+			{
+				"offset": {"line": 10, "column": 0},
+				"map": {
+					"version": 3,
+					"sources": ["webpack://app/src/section-b.js"],
+					"sourcesContent": ["const mode = \"test\";"]
+				}
+			}
+		]
+	}`)
+
+	got, err := extractStandaloneSourceMapSources(content)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "webpack://app/src/section-a.js", got[0].Path)
+	assert.Equal(t, []byte(`const aesKey = "a1bcdefghijklmno";`), got[0].Content)
+	assert.Equal(t, "webpack://app/src/section-b.js", got[1].Path)
+	assert.Equal(t, []byte(`const mode = "test";`), got[1].Content)
+}
+
 func TestIsSourceMapBlobPath(t *testing.T) {
 	assert.True(t, isSourceMapBlobPath("https://app.example.test/static/js/app.11111111.js.map?cache=1"))
 	assert.False(t, isSourceMapBlobPath("https://app.example.test/static/js/app.11111111.js"))
+}
+
+func TestShouldWarnSourceMapParse(t *testing.T) {
+	assert.True(t, shouldWarnSourceMapParse([]byte(`{"version":3`)))
+	assert.False(t, shouldWarnSourceMapParse([]byte(`<!doctype html><html></html>`)))
+	assert.False(t, shouldWarnSourceMapParse([]byte(`   `)))
 }
 
 func TestScanCommand_HelpDoesNotMentionKatana(t *testing.T) {

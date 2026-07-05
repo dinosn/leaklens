@@ -13,7 +13,6 @@ rules:
         (?P<key>
           (?=[^\s"'\\]*[A-Za-z])
           (?=[^\s"'\\]*[0-9])
-          (?=[^\s"'\\]*[^A-Za-z0-9\s"'\\])
           (?:[^\s"'\\]{16}|[^\s"'\\]{24}|[^\s"'\\]{32})
         )
         ["']
@@ -22,6 +21,8 @@ rules:
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
           |
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:key|secret)[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
+          |
+          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:secretkey|secret_key))[A-Za-z_$][\w$]*
         )
         ["']?
         \s* (?:=|:) \s*
@@ -39,8 +40,10 @@ rules:
       - secret
       - fuzzy
     examples:
+      - 'var g_ac = "A1bcdefghijklmno";'
       - 'var g_ac = "A1!bcdefghijklmn";'
       - 'const aesKey = "a1bcdefghijklmno";'
+      - 'const secretKey = "a1bcdefghijklmno";'
       - '{"cryptoSecret": "a1bcdefghijklmno"}'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'

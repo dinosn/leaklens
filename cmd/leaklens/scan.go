@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -784,7 +785,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 			if isSourceMapBlobPath(prov.Path()) {
 				sources, err := extractStandaloneSourceMapSources(content)
 				if err != nil {
-					if !quiet {
+					if !quiet && shouldWarnSourceMapParse(content) {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: source-map parse failed for %s: %v\n", prov.Path(), err)
 					}
 				}
@@ -1446,6 +1447,9 @@ type sourceMapEmbeddedSource struct {
 type standaloneSourceMap struct {
 	Sources        []string  `json:"sources"`
 	SourcesContent []*string `json:"sourcesContent"`
+	Sections       []struct {
+		Map *standaloneSourceMap `json:"map"`
+	} `json:"sections"`
 }
 
 func isSourceMapBlobPath(rawPath string) bool {
@@ -1463,10 +1467,10 @@ func extractStandaloneSourceMapSources(content []byte) ([]sourceMapEmbeddedSourc
 	if err := json.Unmarshal(content, &sm); err != nil {
 		return nil, err
 	}
-	if len(sm.SourcesContent) == 0 {
-		return nil, nil
-	}
+	return extractStandaloneSourceMapSourcesFromMap(sm), nil
+}
 
+func extractStandaloneSourceMapSourcesFromMap(sm standaloneSourceMap) []sourceMapEmbeddedSource {
 	sources := make([]sourceMapEmbeddedSource, 0, len(sm.SourcesContent))
 	for i, sourceContent := range sm.SourcesContent {
 		if sourceContent == nil || *sourceContent == "" {
@@ -1481,7 +1485,21 @@ func extractStandaloneSourceMapSources(content []byte) ([]sourceMapEmbeddedSourc
 			Content: []byte(*sourceContent),
 		})
 	}
-	return sources, nil
+	for _, section := range sm.Sections {
+		if section.Map == nil {
+			continue
+		}
+		sources = append(sources, extractStandaloneSourceMapSourcesFromMap(*section.Map)...)
+	}
+	return sources
+}
+
+func shouldWarnSourceMapParse(content []byte) bool {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return trimmed[0] == '{' || trimmed[0] == '['
 }
 
 // outputScanSummary prints a compact summary after inline reporting.
