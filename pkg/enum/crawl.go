@@ -309,6 +309,9 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			addDiscoveredURL(rawURL)
 		}
 	}
+	for _, rawURL := range e.discoverAssetManifestURLs(ctx) {
+		addDiscoveredURL(rawURL)
+	}
 
 	err, timedOut := e.runCrawlWithDeadline(ctx, engine, closeEngine)
 
@@ -407,6 +410,54 @@ func (e *CrawlEnumerator) filterInScope(urls []string) []string {
 		}
 	}
 	return out
+}
+
+func (e *CrawlEnumerator) discoverAssetManifestURLs(ctx context.Context) []string {
+	base, err := url.Parse(e.TargetURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return nil
+	}
+	manifest := *base
+	manifest.Path = "/asset-manifest.json"
+	manifest.RawQuery = ""
+	manifest.Fragment = ""
+
+	timeout := 30 * time.Second
+	if e.Timeout > 0 && e.Timeout < timeout {
+		timeout = e.Timeout
+	}
+	client := newTLSFallbackHTTPClient(timeout)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifest.String(), nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Accept", "application/json,*/*")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/html") {
+		return nil
+	}
+
+	reader := io.LimitReader(resp.Body, e.MaxSize+1)
+	body, err := io.ReadAll(reader)
+	if err != nil || int64(len(body)) > e.MaxSize {
+		return nil
+	}
+	if !json.Valid(body) {
+		return nil
+	}
+
+	urls := []string{manifest.String()}
+	urls = append(urls, extractAssetManifestURLs(&manifest, body, e.Extensions)...)
+	return e.filterInScope(uniqueStrings(urls))
 }
 
 func extractHTMLAssetURLs(base *url.URL, headers http.Header, body []byte, extensions []string) []string {
@@ -594,6 +645,35 @@ func fetchJSAssetForDiscovery(ctx context.Context, client *http.Client, rawURL s
 		return nil, nil, fmt.Errorf("JS asset too large")
 	}
 	return body, resp.Request.URL, nil
+}
+
+func extractAssetManifestURLs(base *url.URL, body []byte, extensions []string) []string {
+	var decoded interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil
+	}
+
+	var urls []string
+	var walk func(interface{})
+	walk = func(value interface{}) {
+		switch typed := value.(type) {
+		case string:
+			addResolvedAssetURL(&urls, base, typed, extensions)
+		case []interface{}:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]interface{}:
+			for key, item := range typed {
+				if strings.Contains(key, "/") || strings.HasPrefix(key, ".") || hasURLScheme(key) {
+					addResolvedAssetURL(&urls, base, key, extensions)
+				}
+				walk(item)
+			}
+		}
+	}
+	walk(decoded)
+	return uniqueStrings(urls)
 }
 
 func extractJSAssetURLs(base *url.URL, body []byte, extensions []string) []string {

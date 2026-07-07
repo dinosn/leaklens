@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -44,6 +45,7 @@ const (
 	defaultCrawlTimeout     = "2m"
 	defaultCrawlExtensions  = "js,json,map"
 	defaultCrawlScope       = "rdn"
+	defaultDNSCheckTimeout  = 5 * time.Second
 )
 
 func (e *extensionsValue) String() string {
@@ -114,6 +116,7 @@ var (
 	scanAIResolvedReportDir  string
 	scanAITargetHints        []string
 	scanAIClient             aianalysis.Client
+	scanLookupHost           = net.DefaultResolver.LookupHost
 )
 
 var scanCmd = &cobra.Command{
@@ -325,6 +328,10 @@ func runURLScan(cmd *cobra.Command, urls []string) error {
 	if !cmd.Flags().Changed("output") {
 		scanOutputPath = ":memory:"
 	}
+	urls = filterResolvableURLs(scanCommandContext(cmd), cmd, urls)
+	if len(urls) == 0 {
+		return nil
+	}
 	if scanAI {
 		if err := prepareAIOutput(urls[0], true, urls); err != nil {
 			return err
@@ -339,11 +346,6 @@ func runCrawlScan(cmd *cobra.Command, targetURL string) error {
 	if !cmd.Flags().Changed("output") {
 		scanOutputPath = ":memory:"
 	}
-	if scanAI {
-		if err := prepareAIOutput(targetURL, true, []string{targetURL}); err != nil {
-			return err
-		}
-	}
 
 	var timeout time.Duration
 	if scanCrawlTimeout != "" {
@@ -351,6 +353,14 @@ func runCrawlScan(cmd *cobra.Command, targetURL string) error {
 		timeout, err = time.ParseDuration(scanCrawlTimeout)
 		if err != nil {
 			return fmt.Errorf("invalid --crawl-timeout: %w", err)
+		}
+	}
+	if len(filterResolvableURLs(scanCommandContext(cmd), cmd, []string{targetURL})) == 0 {
+		return nil
+	}
+	if scanAI {
+		if err := prepareAIOutput(targetURL, true, []string{targetURL}); err != nil {
+			return err
 		}
 	}
 
@@ -982,6 +992,61 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+func filterResolvableURLs(ctx context.Context, cmd *cobra.Command, urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+
+	resolvedHosts := make(map[string]bool)
+	warnedHosts := make(map[string]bool)
+	filtered := make([]string, 0, len(urls))
+
+	for _, rawURL := range urls {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			filtered = append(filtered, rawURL)
+			continue
+		}
+
+		host := strings.ToLower(parsed.Hostname())
+		if net.ParseIP(host) != nil {
+			filtered = append(filtered, rawURL)
+			continue
+		}
+
+		resolved, ok := resolvedHosts[host]
+		if !ok {
+			resolved = hostResolves(ctx, host)
+			resolvedHosts[host] = resolved
+		}
+		if resolved {
+			filtered = append(filtered, rawURL)
+			continue
+		}
+		if !quiet && !warnedHosts[host] {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: host does not resolve, skipping URL(s) for %s\n", host)
+			warnedHosts[host] = true
+		}
+	}
+
+	return filtered
+}
+
+func scanCommandContext(cmd *cobra.Command) context.Context {
+	if cmd == nil || cmd.Context() == nil {
+		return context.Background()
+	}
+	return cmd.Context()
+}
+
+func hostResolves(ctx context.Context, host string) bool {
+	lookupCtx, cancel := context.WithTimeout(ctx, defaultDNSCheckTimeout)
+	defer cancel()
+
+	addrs, err := scanLookupHost(lookupCtx, host)
+	return err == nil && len(addrs) > 0
+}
 
 func loadRules(path, include, exclude string) ([]*types.Rule, error) {
 	loader := rule.NewLoader()

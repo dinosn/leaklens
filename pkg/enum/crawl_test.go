@@ -195,6 +195,85 @@ func TestCrawlInitialHTMLAssetDiscoveryRetriesCertificateVerificationFailure(t *
 	}
 }
 
+func TestExtractAssetManifestURLsFindsManifestEntries(t *testing.T) {
+	base, err := url.Parse("https://app.example.test/asset-manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"files": {
+			"static/js/0.11111111.chunk.js": "/static/js/0.11111111.chunk.js",
+			"main.js": "/static/js/main.22222222.chunk.js",
+			"runtime-main.js": "/static/js/runtime-main.33333333.js",
+			"main.css": "/static/css/main.44444444.chunk.css",
+			"static/js/app.55555555.js.map": "/static/js/app.55555555.js.map"
+		},
+		"entrypoints": [
+			"static/js/3.66666666.chunk.js",
+			"static/css/main.44444444.chunk.css"
+		]
+	}`)
+
+	got := extractAssetManifestURLs(base, body, []string{"js", "json", "map"})
+	sort.Strings(got)
+	want := []string{
+		"https://app.example.test/static/js/0.11111111.chunk.js",
+		"https://app.example.test/static/js/3.66666666.chunk.js",
+		"https://app.example.test/static/js/app.55555555.js.map",
+		"https://app.example.test/static/js/main.22222222.chunk.js",
+		"https://app.example.test/static/js/runtime-main.33333333.js",
+	}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected asset-manifest URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+	for _, rawURL := range got {
+		if strings.HasSuffix(rawURL, "/main.js") {
+			t.Fatalf("friendly manifest key should not be treated as an asset URL: %s", rawURL)
+		}
+	}
+}
+
+func TestDiscoverAssetManifestURLsProbesRootManifest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/asset-manifest.json":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{
+				"files": {
+					"main.js": "/static/js/main.22222222.chunk.js",
+					"runtime-main.js": "/static/js/runtime-main.33333333.js"
+				},
+				"entrypoints": ["static/js/3.66666666.chunk.js"]
+			}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL + "/nested/page",
+		Extensions: []string{"js", "json"},
+		Scope:      "fqdn",
+	})
+
+	got := enumerator.discoverAssetManifestURLs(context.Background())
+	sort.Strings(got)
+	want := []string{
+		server.URL + "/asset-manifest.json",
+		server.URL + "/static/js/3.66666666.chunk.js",
+		server.URL + "/static/js/main.22222222.chunk.js",
+		server.URL + "/static/js/runtime-main.33333333.js",
+	}
+	sort.Strings(want)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected asset-manifest discovery URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
 func TestNewCrawlEnumeratorDefaultExtensionsIncludeSourceMaps(t *testing.T) {
 	enumerator := NewCrawlEnumerator(CrawlConfig{TargetURL: "https://app.example.test/"})
 	want := []string{"js", "json", "map"}

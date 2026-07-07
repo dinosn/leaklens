@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"net"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/dinosn/leaklens/pkg/enum"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,6 +109,41 @@ func TestExtractStandaloneSourceMapSourcesIndexedSections(t *testing.T) {
 func TestIsSourceMapBlobPath(t *testing.T) {
 	assert.True(t, isSourceMapBlobPath("https://app.example.test/static/js/app.11111111.js.map?cache=1"))
 	assert.False(t, isSourceMapBlobPath("https://app.example.test/static/js/app.11111111.js"))
+}
+
+func TestFilterResolvableURLsSkipsUnresolvedHostsOnce(t *testing.T) {
+	oldLookupHost := scanLookupHost
+	oldQuiet := quiet
+	t.Cleanup(func() {
+		scanLookupHost = oldLookupHost
+		quiet = oldQuiet
+	})
+
+	quiet = false
+	calls := make(map[string]int)
+	scanLookupHost = func(ctx context.Context, host string) ([]string, error) {
+		calls[host]++
+		if host == "missing.example.test" {
+			return nil, &net.DNSError{Err: "no such host", Name: host}
+		}
+		return []string{"203.0.113.10"}, nil
+	}
+
+	var errOut strings.Builder
+	cmd := &cobra.Command{}
+	cmd.SetErr(&errOut)
+
+	got := filterResolvableURLs(context.Background(), cmd, []string{
+		"https://missing.example.test/app.js",
+		"https://ok.example.test/app.js",
+		"https://missing.example.test/other.js",
+	})
+
+	require.Equal(t, []string{"https://ok.example.test/app.js"}, got)
+	assert.Equal(t, 1, calls["missing.example.test"])
+	assert.Equal(t, 1, calls["ok.example.test"])
+	assert.Equal(t, 1, strings.Count(errOut.String(), "missing.example.test"))
+	assert.Contains(t, errOut.String(), "host does not resolve")
 }
 
 func TestShouldWarnSourceMapParse(t *testing.T) {

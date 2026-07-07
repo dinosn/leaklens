@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +90,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldStoreBlobs := scanStoreBlobs
 	oldDownloadDir := scanDownloadDir
 	oldWorkers := scanWorkers
+	oldURLFile := scanURLFile
 	oldExtractMaxSize := extractMaxSize
 	oldExtractMaxTotal := extractMaxTotal
 	oldExtractMaxDepth := extractMaxDepth
@@ -125,6 +129,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanStoreBlobs = oldStoreBlobs
 		scanDownloadDir = oldDownloadDir
 		scanWorkers = oldWorkers
+		scanURLFile = oldURLFile
 		extractMaxSize = oldExtractMaxSize
 		extractMaxTotal = oldExtractMaxTotal
 		extractMaxDepth = oldExtractMaxDepth
@@ -163,6 +168,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanStoreBlobs = false
 	scanDownloadDir = ""
 	scanWorkers = 1
+	scanURLFile = ""
 	extractMaxSize = "10MB"
 	extractMaxTotal = "100MB"
 	extractMaxDepth = 5
@@ -203,6 +209,83 @@ func runRegressionScan(t *testing.T, outputPath string) bytes.Buffer {
 		t.Fatalf("runEnumeratorScan failed: %v", err)
 	}
 	return out
+}
+
+func TestRunScan_URLFileSkipsUnresolvedHosts(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`const token = "testsecret_ABC123";`))
+	}))
+	defer server.Close()
+
+	urlFile := filepath.Join(t.TempDir(), "urls.txt")
+	content := strings.Join([]string{
+		"https://missing.example.test/app.js",
+		server.URL + "/app.js",
+	}, "\n")
+	if err := os.WriteFile(urlFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write URL file: %v", err)
+	}
+	scanURLFile = urlFile
+
+	oldLookupHost := scanLookupHost
+	t.Cleanup(func() {
+		scanLookupHost = oldLookupHost
+	})
+	scanLookupHost = func(ctx context.Context, host string) ([]string, error) {
+		if host == "missing.example.test" {
+			return nil, &net.DNSError{Err: "no such host", Name: host}
+		}
+		return []string{"203.0.113.10"}, nil
+	}
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+
+	if err := runScan(cmd, nil); err != nil {
+		t.Fatalf("runScan failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "testsecret_ABC123") {
+		t.Fatalf("expected resolvable URL finding, got stdout: %s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "host does not resolve") {
+		t.Fatalf("expected unresolved host warning, got stderr: %s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "failed to fetch") {
+		t.Fatalf("unresolved host should be skipped before fetch, got stderr: %s", errOut.String())
+	}
+}
+
+func TestRunCrawlScanSkipsUnresolvedHostBeforeCrawler(t *testing.T) {
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, ":memory:")
+
+	oldLookupHost := scanLookupHost
+	t.Cleanup(func() {
+		scanLookupHost = oldLookupHost
+	})
+	scanLookupHost = func(ctx context.Context, host string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: host}
+	}
+
+	var errOut bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&errOut)
+
+	if err := runCrawlScan(cmd, "https://missing.example.test"); err != nil {
+		t.Fatalf("runCrawlScan failed: %v", err)
+	}
+	if strings.Count(errOut.String(), "host does not resolve") != 1 {
+		t.Fatalf("expected one unresolved host warning, got stderr: %s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "Crawling ") {
+		t.Fatalf("unresolved crawl target should be skipped before crawler starts, got stderr: %s", errOut.String())
+	}
 }
 
 func TestRunEnumeratorScan_StoreBlobsWritesContent(t *testing.T) {
