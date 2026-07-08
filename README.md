@@ -124,6 +124,14 @@ Check GitHub for the latest `main` branch build:
 leaklens update
 ```
 
+Install the latest `main` branch build directly:
+
+```bash
+leaklens update --install
+```
+
+`leaklens update --install` preserves the current build mode. A binary built with Vectorscan/Hyperscan runs the vectorscan `go install` command, while a portable binary runs the normal `go install` command. Both use `GOPROXY=direct` so `main` is resolved from GitHub.
+
 LeakLens also performs a short `main` branch check when a command starts. The automatic notification is written to stderr so scan output stays parseable. This matches the documented `go install ...@main` install path and reports whether the installed binary is built from the latest `main` commit. If the current build cannot be mapped to a commit, normal scans stay quiet and `leaklens update` reports that state explicitly.
 
 Disable the automatic check for scripted runs:

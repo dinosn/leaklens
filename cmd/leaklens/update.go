@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ var (
 	updateCheckTimeout       = 1500 * time.Millisecond
 	manualUpdateCheckTimeout = 10 * time.Second
 	updateInstallCommand     = currentUpdateInstallCommand
+	updateInstallRunner      = runUpdateInstallCommand
+	updateInstall            bool
 )
 
 type updateState string
@@ -52,11 +55,20 @@ type latestMainResponse struct {
 	HTMLURL string `json:"html_url"`
 }
 
+type updateInstallSpec struct {
+	Env  []string
+	Args []string
+}
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Check for newer LeakLens main build",
 	Long:  "Check whether this LeakLens binary matches the latest GitHub main branch commit.",
 	RunE:  runUpdate,
+}
+
+func init() {
+	updateCmd.Flags().BoolVar(&updateInstall, "install", false, "Install the latest main build after checking for updates")
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
@@ -68,6 +80,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	printUpdateStatusTo(cmd.OutOrStdout(), status, true)
+	if updateInstall {
+		return installLatestMain(cmd, status)
+	}
 	return nil
 }
 
@@ -285,15 +300,65 @@ func updateCurrentLabel(status updateStatus) string {
 }
 
 func currentUpdateInstallCommand() string {
-	return updateInstallCommandForBuild(matcher.VectorscanAvailable())
+	return currentUpdateInstallSpec().String()
 }
 
 func updateInstallCommandForBuild(vectorscan bool) string {
+	return updateInstallSpecForBuild(vectorscan).String()
+}
+
+func currentUpdateInstallSpec() updateInstallSpec {
+	return updateInstallSpecForBuild(matcher.VectorscanAvailable())
+}
+
+func updateInstallSpecForBuild(vectorscan bool) updateInstallSpec {
 	target := "github.com/dinosn/leaklens/cmd/leaklens@main"
-	if vectorscan {
-		return "GOPROXY=direct CGO_ENABLED=1 go install -tags vectorscan " + target
+	spec := updateInstallSpec{
+		Env:  []string{"GOPROXY=direct"},
+		Args: []string{"go", "install"},
 	}
-	return "GOPROXY=direct go install " + target
+	if vectorscan {
+		spec.Env = append(spec.Env, "CGO_ENABLED=1")
+		spec.Args = append(spec.Args, "-tags", "vectorscan")
+	}
+	spec.Args = append(spec.Args, target)
+	return spec
+}
+
+func (s updateInstallSpec) String() string {
+	parts := make([]string, 0, len(s.Env)+len(s.Args))
+	parts = append(parts, s.Env...)
+	parts = append(parts, s.Args...)
+	return strings.Join(parts, " ")
+}
+
+func installLatestMain(cmd *cobra.Command, status updateStatus) error {
+	switch status.State {
+	case updateStateLatest:
+		fmt.Fprintln(cmd.OutOrStdout(), "LeakLens is already on latest main; no install needed.")
+		return nil
+	case updateStateUnknown:
+		return fmt.Errorf("cannot install update: latest main status is unknown")
+	}
+
+	spec := currentUpdateInstallSpec()
+	fmt.Fprintf(cmd.OutOrStdout(), "Running: %s\n", spec.String())
+	if err := updateInstallRunner(commandContext(cmd), spec, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		return fmt.Errorf("installing latest main: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "LeakLens update installed.")
+	return nil
+}
+
+func runUpdateInstallCommand(ctx context.Context, spec updateInstallSpec, stdout, stderr io.Writer) error {
+	if len(spec.Args) == 0 {
+		return fmt.Errorf("empty install command")
+	}
+	command := exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
+	command.Env = append(os.Environ(), spec.Env...)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	return command.Run()
 }
 
 func printUpdateStatus(cmd *cobra.Command, status updateStatus, includeLatestStatus bool) {

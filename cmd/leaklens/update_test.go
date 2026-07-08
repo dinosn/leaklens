@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,6 +117,63 @@ func TestUpdateInstallCommandForBuild_Vectorscan(t *testing.T) {
 	)
 }
 
+func TestRunUpdateInstall_OutdatedRunsInstallCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","html_url":"https://example.test/main"}`))
+	}))
+	defer server.Close()
+
+	restore := setUpdateGlobalsForTest(t)
+	defer restore()
+	version = "v0.1.1-0.20260623064508-aaaaaaaaaaaa"
+	updateCheckURL = server.URL
+	manualUpdateCheckTimeout = time.Second
+	updateInstall = true
+
+	var gotSpec updateInstallSpec
+	updateInstallRunner = func(ctx context.Context, spec updateInstallSpec, stdout, stderr io.Writer) error {
+		gotSpec = spec
+		return nil
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	require.NoError(t, runUpdate(cmd, nil))
+	assert.Equal(t, updateInstallSpecForBuild(false), gotSpec)
+	assert.Contains(t, out.String(), "Running: GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main")
+	assert.Contains(t, out.String(), "LeakLens update installed.")
+}
+
+func TestRunUpdateInstall_LatestSkipsInstallCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
+	}))
+	defer server.Close()
+
+	restore := setUpdateGlobalsForTest(t)
+	defer restore()
+	version = "v0.1.1-0.20260623064508-aaaaaaaaaaaa"
+	updateCheckURL = server.URL
+	manualUpdateCheckTimeout = time.Second
+	updateInstall = true
+
+	ranInstall := false
+	updateInstallRunner = func(ctx context.Context, spec updateInstallSpec, stdout, stderr io.Writer) error {
+		ranInstall = true
+		return nil
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	require.NoError(t, runUpdate(cmd, nil))
+	assert.False(t, ranInstall)
+	assert.Contains(t, out.String(), "already on latest main")
+}
+
 func TestRunUpdate_UnknownWhenMainUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
@@ -130,6 +189,25 @@ func TestRunUpdate_UnknownWhenMainUnavailable(t *testing.T) {
 
 	require.NoError(t, runUpdate(cmd, nil))
 	assert.Contains(t, out.String(), "LeakLens update status unknown:")
+}
+
+func TestRunUpdateInstall_UnknownReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	restore := setUpdateGlobalsForTest(t)
+	defer restore()
+	updateCheckURL = server.URL
+	manualUpdateCheckTimeout = time.Second
+	updateInstall = true
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	err := runUpdate(cmd, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "latest main status is unknown")
 }
 
 func TestNotifyUpdateStatus_PrintsLatestStatusOnStartup(t *testing.T) {
@@ -209,6 +287,10 @@ func TestShouldPrintStartupUpdateStatus(t *testing.T) {
 	assert.True(t, shouldPrintStartupUpdateStatus(updateStatus{State: updateStateUnknown}))
 }
 
+func TestUpdateCommandHasInstallFlag(t *testing.T) {
+	assert.NotNil(t, updateCmd.Flags().Lookup("install"))
+}
+
 func setUpdateGlobalsForTest(t *testing.T) func() {
 	t.Helper()
 
@@ -220,11 +302,14 @@ func setUpdateGlobalsForTest(t *testing.T) func() {
 	oldTimeout := updateCheckTimeout
 	oldManualTimeout := manualUpdateCheckTimeout
 	oldInstallCommand := updateInstallCommand
+	oldInstallRunner := updateInstallRunner
+	oldInstall := updateInstall
 	oldEnv, hadEnv := os.LookupEnv("LEAKLENS_NO_UPDATE_CHECK")
 
 	quiet = false
 	verbose = false
 	updateCheckDisabled = false
+	updateInstall = false
 	_ = os.Unsetenv("LEAKLENS_NO_UPDATE_CHECK")
 
 	return func() {
@@ -236,6 +321,8 @@ func setUpdateGlobalsForTest(t *testing.T) func() {
 		updateCheckTimeout = oldTimeout
 		manualUpdateCheckTimeout = oldManualTimeout
 		updateInstallCommand = oldInstallCommand
+		updateInstallRunner = oldInstallRunner
+		updateInstall = oldInstall
 		if hadEnv {
 			_ = os.Setenv("LEAKLENS_NO_UPDATE_CHECK", oldEnv)
 		} else {
