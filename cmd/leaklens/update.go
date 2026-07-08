@@ -114,6 +114,9 @@ func shouldSkipUpdateCheck(cmd *cobra.Command) bool {
 	if cmd.CommandPath() == updateCmd.CommandPath() {
 		return true
 	}
+	if cmd.CommandPath() == versionCmd.CommandPath() {
+		return true
+	}
 	return false
 }
 
@@ -293,6 +296,9 @@ func sameRevision(current, latest string) bool {
 }
 
 func updateCurrentLabel(status updateStatus) string {
+	if pseudoVersionRevision(status.Current) != "" && status.CurrentRevision != "" {
+		return "main@" + shortRevision(status.CurrentRevision)
+	}
 	if status.CurrentRevision == "" {
 		return status.Current
 	}

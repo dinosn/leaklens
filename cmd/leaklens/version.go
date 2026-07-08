@@ -26,13 +26,14 @@ func runVersion(cmd *cobra.Command, args []string) error {
 
 func resolvedVersion() string {
 	moduleVersion := currentVersionBase()
+	displayVersion := displayVersionLabel(moduleVersion, currentBuildRevision())
 
 	details := versionDetails(currentBuildSettings())
 	if len(details) == 0 {
-		return moduleVersion
+		return displayVersion
 	}
 
-	return fmt.Sprintf("%s (%s)", moduleVersion, strings.Join(details, ", "))
+	return fmt.Sprintf("%s (%s)", displayVersion, strings.Join(details, ", "))
 }
 
 func currentVersionBase() string {
@@ -67,6 +68,17 @@ func normalizeModuleVersion(value string) string {
 		return ""
 	}
 	return value
+}
+
+func displayVersionLabel(moduleVersion, revision string) string {
+	currentRevision := resolveCurrentRevision(buildIdentity{
+		Version:  moduleVersion,
+		Revision: revision,
+	})
+	if pseudoVersionRevision(moduleVersion) != "" && currentRevision != "" {
+		return "main@" + shortRevision(currentRevision)
+	}
+	return moduleVersion
 }
 
 func versionDetails(settings []debug.BuildSetting) []string {

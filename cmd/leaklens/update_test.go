@@ -106,6 +106,17 @@ func TestPrintUpdateStatus_Outdated(t *testing.T) {
 	assert.Contains(t, output, "GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main")
 }
 
+func TestUpdateCurrentLabelFormatsPseudoVersionAsMainRef(t *testing.T) {
+	assert.Equal(t, "main@aaaaaaaaaaaa", updateCurrentLabel(updateStatus{
+		Current:         "v0.2.1-0.20260623064508-aaaaaaaaaaaa",
+		CurrentRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}))
+	assert.Equal(t, "v0.2.0 (aaaaaaaaaaaa)", updateCurrentLabel(updateStatus{
+		Current:         "v0.2.0",
+		CurrentRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}))
+}
+
 func TestUpdateInstallCommandForBuild_Vectorscan(t *testing.T) {
 	assert.Equal(t,
 		"GOPROXY=direct CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@main",
@@ -272,6 +283,7 @@ func TestShouldSkipUpdateCheck(t *testing.T) {
 	assert.False(t, shouldSkipUpdateCheck(cmd))
 
 	assert.True(t, shouldSkipUpdateCheck(updateCmd))
+	assert.True(t, shouldSkipUpdateCheck(versionCmd))
 }
 
 func TestShouldPrintStartupUpdateStatus(t *testing.T) {
