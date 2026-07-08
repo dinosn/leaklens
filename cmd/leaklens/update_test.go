@@ -50,6 +50,48 @@ func TestCheckForUpdates_Latest(t *testing.T) {
 	assert.Equal(t, updateStateLatest, status.State)
 }
 
+func TestCheckForUpdates_ResolvesTaggedCurrentVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/commits/main":
+			_, _ = w.Write([]byte(`{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","html_url":"https://example.test/main"}`))
+		case "/commits/v0.2.0":
+			_, _ = w.Write([]byte(`{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","html_url":"https://example.test/v0.2.0"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	status, err := checkForUpdates(t.Context(), server.Client(), server.URL+"/commits/main", buildIdentity{
+		Version: "v0.2.0",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, updateStateOutdated, status.State)
+	assert.Equal(t, "v0.2.0", status.Current)
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", status.CurrentRevision)
+	assert.Equal(t, "bbbbbbbbbbbb", status.Latest)
+}
+
+func TestCheckForUpdates_ResolvedTaggedCurrentVersionCanBeLatest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/commits/main", "/commits/v0.2.1":
+			_, _ = w.Write([]byte(`{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	status, err := checkForUpdates(t.Context(), server.Client(), server.URL+"/commits/main", buildIdentity{
+		Version: "v0.2.1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, updateStateLatest, status.State)
+	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", status.CurrentRevision)
+}
+
 func TestCheckForUpdates_UnknownWhenMainUnavailable(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
@@ -58,6 +100,17 @@ func TestCheckForUpdates_UnknownWhenMainUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, updateStateUnknown, status.State)
 	assert.Equal(t, "source", status.Current)
+}
+
+func TestCommitEndpointForRef(t *testing.T) {
+	assert.Equal(t,
+		"https://api.github.com/repos/dinosn/leaklens/commits/v0.2.1",
+		commitEndpointForRef("https://api.github.com/repos/dinosn/leaklens/commits/main", "v0.2.1"),
+	)
+	assert.Equal(t,
+		"https://example.test/update/v0.2.1",
+		commitEndpointForRef("https://example.test/update", "v0.2.1"),
+	)
 }
 
 func TestClassifyUpdateStatus_PseudoVersionAgainstMain(t *testing.T) {
@@ -154,6 +207,42 @@ func TestRunUpdateInstall_OutdatedRunsInstallCommand(t *testing.T) {
 	require.NoError(t, runUpdate(cmd, nil))
 	assert.Equal(t, updateInstallSpecForBuild(false), gotSpec)
 	assert.Contains(t, out.String(), "Running: GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main")
+	assert.Contains(t, out.String(), "LeakLens update installed.")
+}
+
+func TestRunUpdateInstall_TaggedVersionRunsInstallCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/commits/main":
+			_, _ = w.Write([]byte(`{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","html_url":"https://example.test/main"}`))
+		case "/commits/v0.2.0":
+			_, _ = w.Write([]byte(`{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","html_url":"https://example.test/v0.2.0"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	restore := setUpdateGlobalsForTest(t)
+	defer restore()
+	version = "v0.2.0"
+	updateCheckURL = server.URL + "/commits/main"
+	manualUpdateCheckTimeout = time.Second
+	updateInstall = true
+
+	var gotSpec updateInstallSpec
+	updateInstallRunner = func(ctx context.Context, spec updateInstallSpec, stdout, stderr io.Writer) error {
+		gotSpec = spec
+		return nil
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+
+	require.NoError(t, runUpdate(cmd, nil))
+	assert.Equal(t, updateInstallSpecForBuild(false), gotSpec)
+	assert.Contains(t, out.String(), "LeakLens main update available: v0.2.0 (aaaaaaaaaaaa) -> bbbbbbbbbbbb")
 	assert.Contains(t, out.String(), "LeakLens update installed.")
 }
 

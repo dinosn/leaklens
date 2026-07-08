@@ -171,31 +171,102 @@ func checkForUpdates(ctx context.Context, client *http.Client, endpoint string, 
 		client = http.DefaultClient
 	}
 
+	latest, err := fetchCommit(ctx, client, endpoint)
+	if err != nil {
+		return updateStatus{}, err
+	}
+	if latest.SHA == "" {
+		return classifyUpdateStatus(current, "", "")
+	}
+
+	current = resolveCurrentTaggedRevision(ctx, client, endpoint, current)
+	return classifyUpdateStatus(current, latest.SHA, strings.TrimSpace(latest.HTMLURL))
+}
+
+func fetchCommit(ctx context.Context, client *http.Client, endpoint string) (latestMainResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return updateStatus{}, fmt.Errorf("creating update request: %w", err)
+		return latestMainResponse{}, fmt.Errorf("creating update request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "leaklens")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return updateStatus{}, fmt.Errorf("fetching latest main commit: %w", err)
+		return latestMainResponse{}, fmt.Errorf("fetching latest main commit: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return classifyUpdateStatus(current, "", "")
+		return latestMainResponse{}, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return updateStatus{}, fmt.Errorf("fetching latest main commit: HTTP %d", resp.StatusCode)
+		return latestMainResponse{}, fmt.Errorf("fetching latest main commit: HTTP %d", resp.StatusCode)
 	}
 
 	var latest latestMainResponse
 	if err := json.NewDecoder(resp.Body).Decode(&latest); err != nil {
-		return updateStatus{}, fmt.Errorf("decoding latest main commit: %w", err)
+		return latestMainResponse{}, fmt.Errorf("decoding latest main commit: %w", err)
 	}
-	return classifyUpdateStatus(current, latest.SHA, strings.TrimSpace(latest.HTMLURL))
+	return latest, nil
+}
+
+func resolveCurrentTaggedRevision(ctx context.Context, client *http.Client, endpoint string, current buildIdentity) buildIdentity {
+	if resolveCurrentRevision(current) != "" {
+		return current
+	}
+	tag := currentReleaseTag(current.Version)
+	if tag == "" {
+		return current
+	}
+	tagEndpoint := commitEndpointForRef(endpoint, tag)
+	if tagEndpoint == "" || tagEndpoint == endpoint {
+		return current
+	}
+	commit, err := fetchCommit(ctx, client, tagEndpoint)
+	if err != nil {
+		return current
+	}
+	if revision := normalizeRevision(commit.SHA); revision != "" {
+		current.Revision = revision
+	}
+	return current
+}
+
+func currentReleaseTag(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" || pseudoVersionRevision(version) != "" {
+		return ""
+	}
+	if !strings.HasPrefix(version, "v") || strings.Contains(version, "-") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	for _, part := range parts {
+		if part == "" {
+			return ""
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			return ""
+		}
+	}
+	return version
+}
+
+func commitEndpointForRef(endpoint, ref string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	ref = strings.TrimSpace(ref)
+	if endpoint == "" || ref == "" {
+		return ""
+	}
+	idx := strings.LastIndex(endpoint, "/commits/")
+	if idx >= 0 {
+		return endpoint[:idx+len("/commits/")] + ref
+	}
+	return strings.TrimRight(endpoint, "/") + "/" + ref
 }
 
 func normalizeCurrentVersion(current string) string {
