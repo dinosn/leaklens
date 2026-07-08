@@ -49,6 +49,16 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "hex encoded AES-GCM key property",
+			content: `const cfg = {EncKG: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}; crypto.subtle.importKey("raw", key, {name: "AES-GCM"}, false, ["encrypt", "decrypt"]);`,
+			want:    true,
+		},
+		{
+			name:    "hex encoded AES key property",
+			content: `const cfg = {EncK: "0123456789abcdef0123456789abcdef"}; const key = CryptoJS.enc.Hex.parse(cfg.EncK);`,
+			want:    true,
+		},
+		{
 			name:    "g_ac low complexity",
 			content: `var g_ac = "abcdefghijklmnop";`,
 			want:    false,
@@ -71,6 +81,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "wrong key length",
 			content: `const aesKey = "short";`,
+			want:    false,
+		},
+		{
+			name:    "hex encoded iv is not a key",
+			content: `const cfg = {Iv: "0123456789abcdef0123456789abcdef"};`,
 			want:    false,
 		},
 	}

@@ -24,7 +24,7 @@ type URLEnumerator struct {
 }
 
 // NewURLEnumerator creates a new enumerator for HTTP(S) URLs.
-// maxSize limits the maximum response body size per URL (0 = 10MB default).
+// maxSize limits the maximum response body size per URL (0 = 20MB default).
 func NewURLEnumerator(urls []string, maxSize int64) *URLEnumerator {
 	candidates := make([][]string, 0, len(urls))
 	for _, u := range urls {
@@ -37,7 +37,7 @@ func NewURLEnumerator(urls []string, maxSize int64) *URLEnumerator {
 // where each item can include fallback URLs for the same discovered resource.
 func NewURLEnumeratorWithCandidates(candidates [][]string, maxSize int64) *URLEnumerator {
 	if maxSize <= 0 {
-		maxSize = 10 * 1024 * 1024
+		maxSize = 20 * 1024 * 1024
 	}
 	urls := make([]string, 0, len(candidates))
 	normalized := make([][]string, 0, len(candidates))

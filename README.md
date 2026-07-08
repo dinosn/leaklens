@@ -288,7 +288,7 @@ Targets can be:
 | `--rules-include` | | Include rules matching regex patterns, comma-separated. |
 | `--rules-exclude` | | Exclude rules matching regex patterns, comma-separated. |
 | `--git` | `false` | Treat the target as a Git repository and enumerate history. |
-| `--max-file-size` | `10485760` | Maximum file size to scan in bytes. |
+| `--max-file-size` | `20971520` | Maximum file size to scan. Accepts bytes or `KB`, `MB`, `GB`. |
 | `--include-hidden` | `false` | Include hidden files and directories. |
 | `--context-lines` | `3` | Lines of context before and after matches. Use `0` to disable. |
 | `--incremental` | `false` | Skip already-scanned blobs. |

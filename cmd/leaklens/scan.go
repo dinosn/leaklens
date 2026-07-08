@@ -38,6 +38,10 @@ import (
 // extensionsValue is a custom flag type that displays as "extensions" in help
 type extensionsValue string
 
+type sizeValue struct {
+	target *int64
+}
+
 const (
 	defaultCrawlDepth       = 3
 	defaultCrawlConcurrency = 2
@@ -46,6 +50,7 @@ const (
 	defaultCrawlExtensions  = "js,json,map"
 	defaultCrawlScope       = "rdn"
 	defaultDNSCheckTimeout  = 5 * time.Second
+	defaultScanMaxFileSize  = 20 * 1024 * 1024
 )
 
 func (e *extensionsValue) String() string {
@@ -59,6 +64,31 @@ func (e *extensionsValue) Set(val string) error {
 
 func (e *extensionsValue) Type() string {
 	return "extensions"
+}
+
+func newSizeValue(target *int64, defaultValue int64) *sizeValue {
+	*target = defaultValue
+	return &sizeValue{target: target}
+}
+
+func (s *sizeValue) String() string {
+	if s == nil || s.target == nil {
+		return ""
+	}
+	return strconv.FormatInt(*s.target, 10)
+}
+
+func (s *sizeValue) Set(val string) error {
+	size, err := parseSize(val)
+	if err != nil {
+		return err
+	}
+	*s.target = size
+	return nil
+}
+
+func (s *sizeValue) Type() string {
+	return "size"
 }
 
 var (
@@ -137,7 +167,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanOutputPath, "output", ":memory:", "Output datastore path (:memory: for in-memory only)")
 	scanCmd.Flags().StringVar(&scanOutputFormat, "format", "human", "Output format: json, sarif, human")
 	scanCmd.Flags().BoolVar(&scanGit, "git", false, "Treat target as git repository (enumerate git history)")
-	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Maximum file size to scan (bytes)")
+	scanCmd.Flags().Var(newSizeValue(&scanMaxFileSize, defaultScanMaxFileSize), "max-file-size", "Maximum file size to scan (bytes, KB, MB, GB)")
 	scanCmd.Flags().BoolVar(&scanIncludeHidden, "include-hidden", false, "Include hidden files and directories")
 	scanCmd.Flags().IntVar(&scanContextLines, "context-lines", 3, "Lines of context before/after matches (0 to disable)")
 	scanCmd.Flags().BoolVar(&scanIncremental, "incremental", false, "Skip already-scanned blobs")

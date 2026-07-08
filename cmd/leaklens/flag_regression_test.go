@@ -472,6 +472,52 @@ func TestValidateScanOptionsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestMaxFileSizeFlagAcceptsHumanReadableSizes(t *testing.T) {
+	flag := scanCmd.Flags().Lookup("max-file-size")
+	if flag == nil {
+		t.Fatal("max-file-size flag is not registered")
+	}
+
+	oldMaxFileSize := scanMaxFileSize
+	t.Cleanup(func() {
+		scanMaxFileSize = oldMaxFileSize
+	})
+
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{input: "2048", want: 2048},
+		{input: "20MB", want: 20 * 1024 * 1024},
+		{input: "20mb", want: 20 * 1024 * 1024},
+		{input: "2GB", want: 2 * 1024 * 1024 * 1024},
+		{input: "0", want: 0},
+	}
+
+	for _, tt := range tests {
+		if err := flag.Value.Set(tt.input); err != nil {
+			t.Fatalf("Set(%q) returned error: %v", tt.input, err)
+		}
+		if scanMaxFileSize != tt.want {
+			t.Fatalf("Set(%q) = %d, want %d", tt.input, scanMaxFileSize, tt.want)
+		}
+	}
+
+	if err := flag.Value.Set("20XB"); err == nil {
+		t.Fatal("expected invalid size to be rejected")
+	}
+}
+
+func TestMaxFileSizeFlagDefaultIs20MB(t *testing.T) {
+	flag := scanCmd.Flags().Lookup("max-file-size")
+	if flag == nil {
+		t.Fatal("max-file-size flag is not registered")
+	}
+	if flag.DefValue != "20971520" {
+		t.Fatalf("max-file-size default = %q, want 20971520", flag.DefValue)
+	}
+}
+
 func TestValidateScanOptionsRequiresAIEnvOnlyConfiguration(t *testing.T) {
 	rulePath := writeRegressionRule(t)
 	setScanGlobalsForRegression(t, rulePath, ":memory:")

@@ -27,6 +27,13 @@ func TestURLEnumerator_AllFailedReturnsError(t *testing.T) {
 	}
 }
 
+func TestURLEnumeratorDefaultMaxSizeIs20MB(t *testing.T) {
+	enumerator := NewURLEnumerator([]string{"https://example.invalid/app.js"}, 0)
+	if enumerator.MaxSize != 20*1024*1024 {
+		t.Fatalf("default URL max size = %d, want %d", enumerator.MaxSize, 20*1024*1024)
+	}
+}
+
 func TestURLEnumerator_MixedFailureAndSuccessReturnsContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("const token = 'testsecret_ABC123';"))

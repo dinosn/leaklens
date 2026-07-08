@@ -36,6 +36,25 @@ rules:
         )
         (?=[\s\S]{0,600}(?:AES|CryptoJS|enc\s*\.\s*Utf8|Utf8\s*\.\s*parse))
       |
+        (?P<hex_crypto_key_name>
+          encK(?:G|ey)?
+          |
+          encryptionKey
+          |
+          aesKey
+          |
+          cryptoKey
+          |
+          cipherKey
+        )
+        ["']?
+        \s* (?:=|:) \s*
+        ["']
+        (?P<hex_crypto_key>
+          (?:[A-Fa-f0-9]{32}|[A-Fa-f0-9]{48}|[A-Fa-f0-9]{64})
+        )
+        ["']
+      |
         (?P<crypto_key_name>
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
           |
@@ -65,15 +84,17 @@ rules:
       - 'const secretKey = "a1bcdefghijklmno";'
       - 'const n="a1bcdefghijklmno";if(!n||16!==n.length)return console.error("AES key must be 16 bytes"),"";const r=CryptoJS.enc.Utf8.parse(n);'
       - '{"cryptoSecret": "a1bcdefghijklmno"}'
+      - '{"EncKG": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'
       - 'var displayName = "A1!bcdefghijklmn";'
       - 'const aesKey = "short";'
       - 'const accessKey = "a1bcdefghijklmno";'
       - 'const n="a1bcdefghijklmno";if(!n||16!==n.length)return "";return n.toLowerCase();'
+      - '{"Iv": "0123456789abcdef0123456789abcdef"}'
     description: >
       A fixed-width client-side cryptographic key candidate was found in
       JavaScript. The detector covers semantic AES/crypto/cipher key names,
-      narrow minified AES length-guard patterns, and the observed g_ac
-      client-side AES key convention while avoiding generic 16-character string
-      matches.
+      quoted hex-encoded AES key properties, narrow minified AES length-guard
+      patterns, and the observed g_ac client-side AES key convention while
+      avoiding generic 16-character string matches.
