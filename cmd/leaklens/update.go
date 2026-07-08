@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dinosn/leaklens/pkg/matcher"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +21,7 @@ var (
 	updateCheckURL           = defaultUpdateCheckURL
 	updateCheckTimeout       = 1500 * time.Millisecond
 	manualUpdateCheckTimeout = 10 * time.Second
+	updateInstallCommand     = currentUpdateInstallCommand
 )
 
 type updateState string
@@ -282,6 +284,18 @@ func updateCurrentLabel(status updateStatus) string {
 	return fmt.Sprintf("%s (%s)", status.Current, shortRevision(status.CurrentRevision))
 }
 
+func currentUpdateInstallCommand() string {
+	return updateInstallCommandForBuild(matcher.VectorscanAvailable())
+}
+
+func updateInstallCommandForBuild(vectorscan bool) string {
+	target := "github.com/dinosn/leaklens/cmd/leaklens@main"
+	if vectorscan {
+		return "GOPROXY=direct CGO_ENABLED=1 go install -tags vectorscan " + target
+	}
+	return "GOPROXY=direct go install " + target
+}
+
 func printUpdateStatus(cmd *cobra.Command, status updateStatus, includeLatestStatus bool) {
 	printUpdateStatusTo(cmd.ErrOrStderr(), status, includeLatestStatus)
 }
@@ -293,7 +307,7 @@ func printUpdateStatusTo(out io.Writer, status updateStatus, includeLatestStatus
 		if status.LatestURL != "" {
 			fmt.Fprintf(out, "Main: %s\n", status.LatestURL)
 		}
-		fmt.Fprintln(out, "Install: GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main")
+		fmt.Fprintf(out, "Install: %s\n", updateInstallCommand())
 	case updateStateLatest:
 		if includeLatestStatus {
 			fmt.Fprintf(out, "LeakLens is on latest main: %s\n", status.Latest)

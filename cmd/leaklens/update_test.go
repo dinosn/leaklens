@@ -78,6 +78,14 @@ func TestClassifyUpdateStatus_PseudoVersionAgainstMain(t *testing.T) {
 }
 
 func TestPrintUpdateStatus_Outdated(t *testing.T) {
+	oldInstallCommand := updateInstallCommand
+	updateInstallCommand = func() string {
+		return updateInstallCommandForBuild(false)
+	}
+	defer func() {
+		updateInstallCommand = oldInstallCommand
+	}()
+
 	cmd := &cobra.Command{}
 	var errOut bytes.Buffer
 	cmd.SetErr(&errOut)
@@ -94,6 +102,17 @@ func TestPrintUpdateStatus_Outdated(t *testing.T) {
 	output := errOut.String()
 	assert.Contains(t, output, "LeakLens main update available: v0.1.0 (aaaaaaaaaaaa) -> bbbbbbbbbbbb")
 	assert.Contains(t, output, "GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main")
+}
+
+func TestUpdateInstallCommandForBuild_Vectorscan(t *testing.T) {
+	assert.Equal(t,
+		"GOPROXY=direct CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@main",
+		updateInstallCommandForBuild(true),
+	)
+	assert.Equal(t,
+		"GOPROXY=direct go install github.com/dinosn/leaklens/cmd/leaklens@main",
+		updateInstallCommandForBuild(false),
+	)
 }
 
 func TestRunUpdate_UnknownWhenMainUnavailable(t *testing.T) {
@@ -200,6 +219,7 @@ func setUpdateGlobalsForTest(t *testing.T) func() {
 	oldURL := updateCheckURL
 	oldTimeout := updateCheckTimeout
 	oldManualTimeout := manualUpdateCheckTimeout
+	oldInstallCommand := updateInstallCommand
 	oldEnv, hadEnv := os.LookupEnv("LEAKLENS_NO_UPDATE_CHECK")
 
 	quiet = false
@@ -215,6 +235,7 @@ func setUpdateGlobalsForTest(t *testing.T) func() {
 		updateCheckURL = oldURL
 		updateCheckTimeout = oldTimeout
 		manualUpdateCheckTimeout = oldManualTimeout
+		updateInstallCommand = oldInstallCommand
 		if hadEnv {
 			_ = os.Setenv("LEAKLENS_NO_UPDATE_CHECK", oldEnv)
 		} else {
