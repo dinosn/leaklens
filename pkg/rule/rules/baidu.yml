@@ -1,0 +1,42 @@
+rules:
+
+- name: Baidu Maps API Key
+  id: leaklens.baidu.maps.1
+
+  pattern: |
+    (?xi)
+    \b
+    (?:
+      api\.map\.baidu\.com
+      |
+      map\.baidu\.com
+      |
+      baidu
+    )
+    (?: [^"'`<>] | &amp; ){0,512}?
+    (?: [?&] | &amp; )
+    ak
+    =
+    (?P<key>[A-Za-z0-9_-]{20,64})
+    (?: [^A-Za-z0-9_-] | $ )
+
+  categories: [api, secret]
+
+  examples:
+  - 'script.src = "https://api.map.baidu.com/api?v=2.0&ak=AbCdEfGhIjKlMnOpQrStUvWxYz123456&callback=initialize";'
+  - 'https://map.baidu.com/?qt=api&ak=Zm9vYmFyQmF6UXV4MTIzNDU2Nzg5MA_1'
+  - 'baidu maps loader: /api?v=3.0&amp;ak=TestKeyForBaiduMaps1234567890&amp;callback=initMap'
+
+  negative_examples:
+  - 'https://example.test/api?ak=AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+  - 'const ak = "AbCdEfGhIjKlMnOpQrStUvWxYz123456";'
+  - 'https://api.map.baidu.com/api?v=2.0&callback=initialize'
+  - 'https://api.map.baidu.com/api?v=2.0&ak=short&callback=initialize'
+
+  description: |
+    Baidu Maps browser API key passed through the `ak` query parameter on
+    Baidu Maps API loader URLs. Exposed client-side map keys should be
+    reviewed for referrer restrictions, quota controls, and allowed APIs.
+
+  references:
+  - https://lbsyun.baidu.com/faq/api?title=webapi/appendix
