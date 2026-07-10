@@ -83,6 +83,40 @@ func TestGenericPasswordUIPromptSuppressionParallel(t *testing.T) {
 	assert.Equal(t, []string{"P@ssw0rd123!"}, matchGroupValues(matches))
 }
 
+func TestHTTPQuerySecretSuppression(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "mixed opaque token", value: "4f9A2b7C8d1E6g", want: true},
+		{name: "URL safe token", value: "N7qP2mX9vR4sL8-za_", want: true},
+		{name: "short token", value: "a1b2c3", want: false},
+		{name: "letters only", value: "abcdefghijklmn", want: false},
+		{name: "digits only", value: "12345678901234", want: false},
+		{name: "low diversity", value: "a1a1a1a1a1a1a1", want: false},
+		{name: "example placeholder", value: "example123456", want: false},
+		{name: "your token placeholder", value: "YOUR_API_TOKEN_12345", want: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isLikelyHTTPQuerySecret(tc.value))
+		})
+	}
+}
+
+func TestShouldSuppressHTTPQuerySecretUsesNamedCapture(t *testing.T) {
+	match := &types.Match{
+		RuleID:      "leaklens.http.query-secret.1",
+		NamedGroups: map[string][]byte{"token": []byte("example123456")},
+	}
+	assert.True(t, shouldSuppressMatch(match))
+
+	match.NamedGroups["token"] = []byte("4f9A2b7C8d1E6g")
+	assert.False(t, shouldSuppressMatch(match))
+}
+
 func loadGenericPasswordRules(t *testing.T) []*types.Rule {
 	t.Helper()
 

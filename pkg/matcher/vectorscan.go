@@ -180,12 +180,13 @@ func (m *VectorscanMatcher) compilePatterns() error {
 	var firstCompileDB hyperscan.BlockDatabase
 	firstCompileDB, err := hyperscan.NewBlockDatabase(hsPatternList...)
 	if err == nil {
-		// All patterns are compatible! Fast path - reuse this compilation
-		for i, pi := range allPatterns {
-			pi.pattern.Id = i
+		// All patterns are compatible! Fast path - reuse this compilation.
+		// Preserve the IDs used to build firstCompileDB. They can contain gaps
+		// when known-incompatible rules were routed to regexp2 before this batch.
+		for _, pi := range allPatterns {
 			hsPatterns = append(hsPatterns, pi.pattern)
 			hsRules = append(hsRules, pi.rule)
-			hsPatternToRule[uint(i)] = pi.rule
+			hsPatternToRule[uint(pi.pattern.Id)] = pi.rule
 		}
 	} else {
 		// Some patterns are incompatible - use binary search to find them

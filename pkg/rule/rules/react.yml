@@ -16,14 +16,8 @@ rules:
 - name: React App Username
   id: np.reactapp.1
 
-  pattern: |
-    (?x)(?i)
-    \b
-    REACT_APP (?: _[A-Z0-9]+)* _USER (?: NAME)?          (?# variable name )
-    \s* = \s*
-    ['"]?
-    ( [^\s'"$]{3,} )                                     (?# value )
-    (?: [\s'"$] | $ )
+  pattern: |-
+    (?i)\bREACT_APP(?:_[A-Z0-9]+)*_USER(?:NAME)?['"]?\s*(?:=\s*['"]?|:\s*['"])([^\s'"$]{3,})(?:[\s'"$]|$)
 
   categories: [fuzzy, identifier]
 
@@ -38,22 +32,19 @@ rules:
   - 'REACT_APP_AUTH_USERNAME=bowie'
   - '    REACT_APP_AUTH_USERNAME=bowie    # some comment'
   - 'REACT_APP_MAILER_USERNAME=smtp_username # Enter your SMTP email username'
+  - 'const env={REACT_APP_DEMO_USERNAME:"guest_user@example.test"};'
+  - 'const env={"REACT_APP_DEMO_USERNAME":''guest_user@example.test''};'
 
   negative_examples:
   - 'REACT_APP_FRONTEND_LOGIN_FORGOT_USERNAME=$REACT_APP_MATRIX_BASE_URL/classroom/#/forgot_username'
+  - 'const env={REACT_APP_DEMO_USERNAME:runtime.username};'
 
 
 - name: React App Password
   id: np.reactapp.2
 
-  pattern: |
-    (?x)(?i)
-    \b
-    REACT_APP (?: _[A-Z0-9]+)* _PASS (?: WORD)?          (?# variable name )
-    \s* = \s*
-    ['"]?
-    ( [^\s'"$]{6,} )                                     (?# value )
-    (?: [\s'"$] | $ )
+  pattern: |-
+    (?i)\bREACT_APP(?:_[A-Z0-9]+)*_PASS(?:WORD)?['"]?\s*(?:=\s*['"]?|:\s*['"])([^$\s'"][^\s'"]{5,})(?:[\s'"$]|$)
 
   categories: [fuzzy, secret]
 
@@ -68,7 +59,10 @@ rules:
   - 'REACT_APP_AUTH_PASSWORD=whiteduke'
   - '    REACT_APP_AUTH_PASSWORD=whiteduke    # some comment'
   - 'REACT_APP_MAILER_PASSWORD=smtp_password # Enter your SMTP email password'
+  - 'const env={REACT_APP_DEMO_PASSWORD:"S7nthetic/value-42"};'
+  - 'const env={"REACT_APP_DEMO_PASSWORD":''S7nthetic/value-42''};'
 
   negative_examples:
   - '  const password = process.env.REACT_APP_FIREBASE_DEV_PASSWORD || "not-set"'
   - 'REACT_APP_FRONTEND_LOGIN_FORGOT_PASSWORD=$REACT_APP_MATRIX_BASE_URL/classroom/#/forgot_password'
+  - 'const env={REACT_APP_DEMO_PASSWORD:runtime.password};'

@@ -1,6 +1,7 @@
 package matcher
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -14,15 +15,73 @@ func shouldSuppressMatch(match *types.Match) bool {
 
 	switch match.RuleID {
 	case "np.generic.5", "np.generic.6":
+		if len(match.Groups) == 0 {
+			return false
+		}
+		return isGenericPasswordUIPrompt(string(match.Groups[0]))
+	case "leaklens.http.query-secret.1":
+		value := match.NamedGroups["token"]
+		if len(value) == 0 && len(match.Groups) > 0 {
+			value = match.Groups[0]
+		}
+		return !isLikelyHTTPQuerySecret(string(value))
 	default:
 		return false
 	}
+}
 
-	if len(match.Groups) == 0 {
+func isLikelyHTTPQuerySecret(value string) bool {
+	value = strings.TrimRight(strings.TrimSpace(value), "=")
+	if len(value) < 12 || len(value) > 256 {
 		return false
 	}
 
-	return isGenericPasswordUIPrompt(string(match.Groups[0]))
+	unique := make(map[byte]struct{}, len(value))
+	hasLetter := false
+	hasDigit := false
+	counts := make(map[byte]float64, len(value))
+	for i := 0; i < len(value); i++ {
+		char := value[i]
+		unique[char] = struct{}{}
+		counts[char]++
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') {
+			hasLetter = true
+		}
+		if char >= '0' && char <= '9' {
+			hasDigit = true
+		}
+	}
+	if !hasLetter || !hasDigit || len(unique) < 6 {
+		return false
+	}
+
+	lower := strings.ToLower(value)
+	compact := strings.NewReplacer("_", "", "-", "", ".", "").Replace(lower)
+	for _, marker := range []string{
+		"example",
+		"sample",
+		"dummy",
+		"placeholder",
+		"changeme",
+		"replace",
+		"insert",
+		"yourtoken",
+		"yourapitoken",
+		"yourapikey",
+		"tokenhere",
+	} {
+		if strings.Contains(compact, marker) {
+			return false
+		}
+	}
+
+	length := float64(len(value))
+	entropy := 0.0
+	for _, count := range counts {
+		probability := count / length
+		entropy -= probability * math.Log2(probability)
+	}
+	return entropy >= 3.0
 }
 
 func isGenericPasswordUIPrompt(value string) bool {

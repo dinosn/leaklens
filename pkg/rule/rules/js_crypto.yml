@@ -55,6 +55,41 @@ rules:
         )
         ["']
       |
+        (?P<react_crypto_name>
+          REACT_APP_(?:[A-Z0-9]+_)*(?:KEY|SECRET|PASSPHRASE)
+        )
+        ["']? \s* : \s* ["']
+        (?P<react_crypto_passphrase>
+          (?=[^\s"'\\]{12,128}["'])
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
+          [^\s"'\\]{12,128}
+        )
+        ["']
+        (?=
+          [\s\S]{0,4096}
+          (?P<react_crypto_alias>[A-Za-z_$][\w$]{0,63})
+          \s* = \s*
+          [A-Za-z_$][\w$]{0,63} \s* \. \s*
+          \k<react_crypto_name> \b
+          [\s\S]{0,1600}
+          (?:[A-Za-z_$][\w$]{0,63} \s* \. \s*)?
+          AES \s* \. \s* (?:encrypt|decrypt)
+          \s* \( [^,;\r\n]{1,600} , \s* \k<react_crypto_alias> \b
+        )
+      |
+        (?:[A-Za-z_$][\w$]{0,63} \s* \. \s*)?
+        AES \s* \. \s* (?:encrypt|decrypt)
+        \s* \( [^,;\r\n]{1,600} , \s*
+        ["']
+        (?P<inline_aes_passphrase>
+          (?=[^\s"'\\]{12,128}["'])
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
+          [^\s"'\\]{12,128}
+        )
+        ["'] \s* (?:,|\))
+      |
         (?P<crypto_key_name>
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
           |
@@ -85,6 +120,9 @@ rules:
       - 'const n="a1bcdefghijklmno";if(!n||16!==n.length)return console.error("AES key must be 16 bytes"),"";const r=CryptoJS.enc.Utf8.parse(n);'
       - '{"cryptoSecret": "a1bcdefghijklmno"}'
       - '{"EncKG": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}'
+      - 'const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};const key=env.REACT_APP_FORM_PASSPHRASE;CryptoJS.AES.encrypt(payload,key);'
+      - 'CryptoJS.AES.encrypt(payload,"S7nthetic/passphrase")'
+      - 'crypto.AES.decrypt(ciphertext,"S7nthetic/passphrase")'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'
       - 'var displayName = "A1!bcdefghijklmn";'
@@ -92,9 +130,14 @@ rules:
       - 'const accessKey = "a1bcdefghijklmno";'
       - 'const n="a1bcdefghijklmno";if(!n||16!==n.length)return "";return n.toLowerCase();'
       - '{"Iv": "0123456789abcdef0123456789abcdef"}'
+      - 'const env={REACT_APP_PUBLIC_WIDGET_KEY:"PublicClient42Value"};render(env.REACT_APP_PUBLIC_WIDGET_KEY);'
+      - 'const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};send(env.REACT_APP_FORM_PASSPHRASE);'
+      - 'CryptoJS.AES.encrypt(payload,"short1!")'
+      - 'CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})'
     description: >
-      A fixed-width client-side cryptographic key candidate was found in
+      A client-side cryptographic key or passphrase candidate was found in
       JavaScript. The detector covers semantic AES/crypto/cipher key names,
       quoted hex-encoded AES key properties, narrow minified AES length-guard
-      patterns, and the observed g_ac client-side AES key convention while
-      avoiding generic 16-character string matches.
+      patterns, React configuration values proven to flow into an AES call,
+      literal AES key/passphrase arguments, and the observed g_ac convention
+      while avoiding generic key and string matches.

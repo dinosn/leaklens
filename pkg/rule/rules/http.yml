@@ -40,3 +40,28 @@ rules:
   - https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication
 
   categories: [secret, fuzzy, generic]
+
+
+- name: Credential in HTTP URL Query
+  id: leaklens.http.query-secret.1
+
+  pattern: |-
+    (?i)\bhttps?://[^\s"'\x60<>#\\?]{1,1000}\?(?:(?:token|access[_-]?(?:key|token)|api[_-]?(?:key|token)|auth[_-]?token|client[_-]?secret|private[_-]?token|refresh[_-]?token|id[_-]?token)=|(?:[^\s"'\x60<>#\\&]{1,1000}&)+(?:token|access[_-]?(?:key|token)|api[_-]?(?:key|token)|auth[_-]?token|client[_-]?secret|private[_-]?token|refresh[_-]?token|id[_-]?token)=)(?P<token>[a-z0-9][a-z0-9._~+/%-]{10,254}[a-z0-9](?:={0,2})?)(?:[&#\s"'\x60<>\\]|$)
+
+  examples:
+  - 'fetch("https://geo.example.test/json?token=4f9A2b7C8d1E6g")'
+  - 'fetch("https://api.example.test/data?format=json&access_token=N7qP2mX9vR4sL8&lang=en")'
+
+  negative_examples:
+  - 'fetch("/json?token=4f9A2b7C8d1E6g")'
+  - 'fetch("https://geo.example.test/json?token=short1")'
+  - 'fetch("https://geo.example.test/json?token=example123456")'
+  - 'fetch("https://geo.example.test/json?page_token=4f9A2b7C8d1E6g")'
+  - 'fetch("https://geo.example.test/json?token=${TOKEN}")'
+
+  categories: [api, secret, fuzzy, generic]
+
+  description: >
+    A reusable credential-like value was found in a sensitive HTTP URL query
+    parameter. Candidates are filtered consistently by the matcher for mixed
+    character classes, diversity, entropy, and obvious placeholder values.

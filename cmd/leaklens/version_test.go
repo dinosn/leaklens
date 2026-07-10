@@ -54,7 +54,7 @@ func TestNormalizeModuleVersion(t *testing.T) {
 
 func TestDisplayVersionLabelFormatsPseudoVersionAsMainRef(t *testing.T) {
 	assert.Equal(t, "main@364265e4cc6b", displayVersionLabel("v0.0.0-20260622171402-364265e4cc6b", ""))
-	assert.Equal(t, "main@364265e4cc6b", displayVersionLabel("v0.2.1-0.20260622171402-364265e4cc6b", ""))
+	assert.Equal(t, "main@364265e4cc6b", displayVersionLabel("v0.2.2-0.20260622171402-364265e4cc6b", ""))
 	assert.Equal(t, "v0.2.0", displayVersionLabel("v0.2.0", "364265e4cc6b92b9d1fafbfb936a97484fc1052"))
 	assert.Equal(t, "source", displayVersionLabel("source", "364265e4cc6b92b9d1fafbfb936a97484fc1052"))
 }

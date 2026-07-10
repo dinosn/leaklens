@@ -50,6 +50,35 @@ func TestVectorscanMatcher_NoMatch(t *testing.T) {
 	assert.Len(t, matches, 0)
 }
 
+func TestVectorscanMatcher_KnownFallbackPreservesLaterPatternID(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:      "test-before-fallback",
+			Name:    "Before fallback",
+			Pattern: `before_secret_[a-z]+`,
+		},
+		{
+			ID:      "leaklens.js.crypto.1",
+			Name:    "Known regexp2 fallback",
+			Pattern: `fallback_secret_[a-z]+`,
+		},
+		{
+			ID:      "test-after-fallback",
+			Name:    "After fallback",
+			Pattern: `after_secret_[a-z]+`,
+		},
+	}
+
+	m, err := NewVectorscan(rules, 0)
+	require.NoError(t, err)
+	defer m.Close()
+
+	matches, err := m.Match([]byte("after_secret_omega"))
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	assert.Equal(t, "test-after-fallback", matches[0].RuleID)
+}
+
 func TestVectorscanMatcher_ExtendedMode(t *testing.T) {
 	// Test that extended mode patterns work after preprocessing
 	rules := []*types.Rule{

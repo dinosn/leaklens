@@ -59,6 +59,21 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "React passphrase flowing into AES",
+			content: `const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};const key=env.REACT_APP_FORM_PASSPHRASE;CryptoJS.AES.encrypt(payload,key);`,
+			want:    true,
+		},
+		{
+			name:    "literal AES encryption passphrase",
+			content: `CryptoJS.AES.encrypt(payload,"S7nthetic/passphrase")`,
+			want:    true,
+		},
+		{
+			name:    "minified literal AES decryption passphrase",
+			content: `crypto.AES.decrypt(ciphertext,"S7nthetic/passphrase")`,
+			want:    true,
+		},
+		{
 			name:    "g_ac low complexity",
 			content: `var g_ac = "abcdefghijklmnop";`,
 			want:    false,
@@ -86,6 +101,26 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "hex encoded iv is not a key",
 			content: `const cfg = {Iv: "0123456789abcdef0123456789abcdef"};`,
+			want:    false,
+		},
+		{
+			name:    "public React API key without AES use",
+			content: `const env={REACT_APP_PUBLIC_WIDGET_KEY:"PublicClient42Value"};render(env.REACT_APP_PUBLIC_WIDGET_KEY);`,
+			want:    false,
+		},
+		{
+			name:    "survey key without AES use",
+			content: `const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};send(env.REACT_APP_FORM_PASSPHRASE);`,
+			want:    false,
+		},
+		{
+			name:    "short AES argument",
+			content: `CryptoJS.AES.encrypt(payload,"short1!")`,
+			want:    false,
+		},
+		{
+			name:    "passphrase label is not AES argument",
+			content: `CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})`,
 			want:    false,
 		},
 	}
