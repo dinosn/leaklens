@@ -19,18 +19,18 @@ func shouldSuppressMatch(match *types.Match) bool {
 			return false
 		}
 		return isGenericPasswordUIPrompt(string(match.Groups[0]))
-	case "leaklens.http.query-secret.1":
+	case "leaklens.http.query-secret.1", "leaklens.http.api-key-header.1":
 		value := match.NamedGroups["token"]
 		if len(value) == 0 && len(match.Groups) > 0 {
 			value = match.Groups[0]
 		}
-		return !isLikelyHTTPQuerySecret(string(value))
+		return !isLikelyOpaqueSecretCandidate(string(value))
 	default:
 		return false
 	}
 }
 
-func isLikelyHTTPQuerySecret(value string) bool {
+func isLikelyOpaqueSecretCandidate(value string) bool {
 	value = strings.TrimRight(strings.TrimSpace(value), "=")
 	if len(value) < 12 || len(value) > 256 {
 		return false

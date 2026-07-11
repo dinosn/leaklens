@@ -103,6 +103,7 @@ rulesets:
   - np.http.1         # HTTP Basic Authentication
   - np.http.2         # HTTP Bearer Token
   - leaklens.http.query-secret.1 # Credential in HTTP URL Query
+  - leaklens.http.api-key-header.1 # Credential in HTTP API-Key Header
   - np.huggingface.1  # HuggingFace User Access Token
   - np.jenkins.1      # Jenkins Token or Crumb
   - np.jenkins.2      # Jenkins Setup Admin Password

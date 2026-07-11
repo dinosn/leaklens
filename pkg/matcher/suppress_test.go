@@ -83,7 +83,7 @@ func TestGenericPasswordUIPromptSuppressionParallel(t *testing.T) {
 	assert.Equal(t, []string{"P@ssw0rd123!"}, matchGroupValues(matches))
 }
 
-func TestHTTPQuerySecretSuppression(t *testing.T) {
+func TestLikelyOpaqueSecretCandidate(t *testing.T) {
 	testCases := []struct {
 		name  string
 		value string
@@ -101,20 +101,27 @@ func TestHTTPQuerySecretSuppression(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isLikelyHTTPQuerySecret(tc.value))
+			assert.Equal(t, tc.want, isLikelyOpaqueSecretCandidate(tc.value))
 		})
 	}
 }
 
-func TestShouldSuppressHTTPQuerySecretUsesNamedCapture(t *testing.T) {
-	match := &types.Match{
-		RuleID:      "leaklens.http.query-secret.1",
-		NamedGroups: map[string][]byte{"token": []byte("example123456")},
-	}
-	assert.True(t, shouldSuppressMatch(match))
+func TestShouldSuppressOpaqueSecretUsesNamedCapture(t *testing.T) {
+	for _, ruleID := range []string{
+		"leaklens.http.query-secret.1",
+		"leaklens.http.api-key-header.1",
+	} {
+		t.Run(ruleID, func(t *testing.T) {
+			match := &types.Match{
+				RuleID:      ruleID,
+				NamedGroups: map[string][]byte{"token": []byte("example123456")},
+			}
+			assert.True(t, shouldSuppressMatch(match))
 
-	match.NamedGroups["token"] = []byte("4f9A2b7C8d1E6g")
-	assert.False(t, shouldSuppressMatch(match))
+			match.NamedGroups["token"] = []byte("4f9A2b7C8d1E6g")
+			assert.False(t, shouldSuppressMatch(match))
+		})
+	}
 }
 
 func loadGenericPasswordRules(t *testing.T) []*types.Rule {

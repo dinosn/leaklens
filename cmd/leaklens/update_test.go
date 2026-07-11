@@ -76,7 +76,7 @@ func TestCheckForUpdates_ResolvesTaggedCurrentVersion(t *testing.T) {
 func TestCheckForUpdates_ResolvedTaggedCurrentVersionCanBeLatest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/commits/main", "/commits/v0.2.2":
+		case "/commits/main", "/commits/v0.2.3":
 			_, _ = w.Write([]byte(`{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`))
 		default:
 			http.NotFound(w, r)
@@ -85,7 +85,7 @@ func TestCheckForUpdates_ResolvedTaggedCurrentVersionCanBeLatest(t *testing.T) {
 	defer server.Close()
 
 	status, err := checkForUpdates(t.Context(), server.Client(), server.URL+"/commits/main", buildIdentity{
-		Version: "v0.2.2",
+		Version: "v0.2.3",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, updateStateLatest, status.State)
@@ -104,12 +104,12 @@ func TestCheckForUpdates_UnknownWhenMainUnavailable(t *testing.T) {
 
 func TestCommitEndpointForRef(t *testing.T) {
 	assert.Equal(t,
-		"https://api.github.com/repos/dinosn/leaklens/commits/v0.2.2",
-		commitEndpointForRef("https://api.github.com/repos/dinosn/leaklens/commits/main", "v0.2.2"),
+		"https://api.github.com/repos/dinosn/leaklens/commits/v0.2.3",
+		commitEndpointForRef("https://api.github.com/repos/dinosn/leaklens/commits/main", "v0.2.3"),
 	)
 	assert.Equal(t,
-		"https://example.test/update/v0.2.2",
-		commitEndpointForRef("https://example.test/update", "v0.2.2"),
+		"https://example.test/update/v0.2.3",
+		commitEndpointForRef("https://example.test/update", "v0.2.3"),
 	)
 }
 
@@ -161,7 +161,7 @@ func TestPrintUpdateStatus_Outdated(t *testing.T) {
 
 func TestUpdateCurrentLabelFormatsPseudoVersionAsMainRef(t *testing.T) {
 	assert.Equal(t, "main@aaaaaaaaaaaa", updateCurrentLabel(updateStatus{
-		Current:         "v0.2.2-0.20260623064508-aaaaaaaaaaaa",
+		Current:         "v0.2.3-0.20260623064508-aaaaaaaaaaaa",
 		CurrentRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}))
 	assert.Equal(t, "v0.2.0 (aaaaaaaaaaaa)", updateCurrentLabel(updateStatus{

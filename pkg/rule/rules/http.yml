@@ -65,3 +65,28 @@ rules:
     A reusable credential-like value was found in a sensitive HTTP URL query
     parameter. Candidates are filtered consistently by the matcher for mixed
     character classes, diversity, entropy, and obvious placeholder values.
+
+
+- name: Credential in HTTP API-Key Header
+  id: leaklens.http.api-key-header.1
+
+  pattern: |-
+    (?i)\bx-api-key\b["'\x60]?[\t ]*(?::|,)[\t ]*(?:["'\x60]{2}[\t ]*(?:\.[\t ]*concat[\t ]*\([\t ]*|\+[\t ]*))?["'\x60](?P<token>[a-z0-9][a-z0-9._~+/-]{10,254}[a-z0-9]={0,2})["'\x60](?:[\t ]*\))?
+
+  examples:
+  - 'headers: {"x-api-key": "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0"}'
+  - 'headers: {"x-api-key": "".concat("Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2H1g0")}'
+
+  negative_examples:
+  - 'headers: {"x-api-key": apiKey}'
+  - 'headers: {"x-api-key": "".concat(apiKey)}'
+  - 'headers: {"x-api-key": "YOUR_API_KEY_HERE_1234567890"}'
+
+  categories: [api, secret, fuzzy, generic]
+
+  description: >
+    A reusable credential-like literal was found in an HTTP x-api-key header.
+    Direct quoted values, common header setter calls, and minifier-generated
+    empty-string concatenation are covered. Candidates are filtered consistently
+    by the matcher for mixed character classes, diversity, entropy, and obvious
+    placeholder values.
