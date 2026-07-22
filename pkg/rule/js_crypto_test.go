@@ -74,6 +74,16 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "CryptoJS alias parsed passphrase constant flows into AES key",
+			content: `const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}`,
+			want:    true,
+		},
+		{
+			name:    "CryptoJS default parameter passphrase flows into AES key",
+			content: `function e(p,a="S7nthetic/pass123"){const k=c.enc.Utf8.parse(a);return c.AES.decrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}`,
+			want:    true,
+		},
+		{
 			name:    "g_ac low complexity",
 			content: `var g_ac = "abcdefghijklmnop";`,
 			want:    false,
@@ -121,6 +131,16 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "passphrase label is not AES argument",
 			content: `CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})`,
+			want:    false,
+		},
+		{
+			name:    "parsed constant used only as iv is not AES key",
+			content: `const a="S7nthetic/pass123";function e(p){const iv=c.enc.Utf8.parse(a);return c.AES.encrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString()}`,
+			want:    false,
+		},
+		{
+			name:    "parsed default parameter used only as iv is not AES key",
+			content: `function e(p,a="S7nthetic/pass123"){const iv=c.enc.Utf8.parse(a);return c.AES.decrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}`,
 			want:    false,
 		},
 	}

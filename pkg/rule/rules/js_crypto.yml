@@ -90,6 +90,60 @@ rules:
         )
         ["'] \s* (?:,|\))
       |
+        (?:var|let|const) \s+
+        (?P<parsed_crypto_key_source>[A-Za-z_$][\w$]{0,63})
+        \s* = \s*
+        ["']
+        (?P<parsed_crypto_key>
+          (?=[^\s"'\\]{12,128}["'])
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
+          [^\s"'\\]{12,128}
+        )
+        ["']
+        (?=
+          [\s\S]{0,2000}
+          (?P<parsed_crypto_key_var>[A-Za-z_$][\w$]{0,63})
+          \s* = \s*
+          (?P<parsed_crypto_alias>[A-Za-z_$][\w$]{0,63})
+          \s* \. \s* enc \s* \. \s* Utf8 \s* \. \s* parse
+          \s* \( \s* \k<parsed_crypto_key_source> \s* \)
+          [\s\S]{0,1600}
+          \k<parsed_crypto_alias> \s* \. \s* AES \s* \. \s* (?:encrypt|decrypt)
+          \s* \( [^,;\r\n]{1,700} , \s* \k<parsed_crypto_key_var> \b
+          [\s\S]{0,700}
+          \k<parsed_crypto_alias> \s* \. \s* (?:mode|pad) \s* \.
+        )
+      |
+        function \s+ [A-Za-z_$][\w$]{0,63} \s*
+        \(
+          [^)]{0,600}?
+          (?P<default_crypto_key_param>[A-Za-z_$][\w$]{0,63})
+          \s* = \s*
+          ["']
+          (?P<default_crypto_key>
+            (?=[^\s"'\\]{12,128}["'])
+            (?=[^\s"'\\]*[A-Za-z])
+            (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
+            [^\s"'\\]{12,128}
+          )
+          ["']
+          [^)]{0,600}?
+        \)
+        (?=
+          [\s\S]{0,2000}
+          (?P<default_crypto_key_var>[A-Za-z_$][\w$]{0,63})
+          \s* = \s*
+          (?P<default_crypto_alias>[A-Za-z_$][\w$]{0,63})
+          \s* \. \s* enc \s* \. \s* Utf8 \s* \. \s* parse
+          \s* \( \s* \k<default_crypto_key_param> \s* \)
+          [\s\S]{0,1600}
+          \k<default_crypto_alias> \s* \. \s* AES \s* \. \s* (?:encrypt|decrypt)
+          \s* \( [^,;\r\n]{1,700} , \s* \k<default_crypto_key_var> \b
+          [\s\S]{0,700}
+          \k<default_crypto_alias> \s* \. \s* (?:mode|pad) \s* \.
+        )
+      |
         (?P<crypto_key_name>
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
           |
@@ -123,6 +177,8 @@ rules:
       - 'const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};const key=env.REACT_APP_FORM_PASSPHRASE;CryptoJS.AES.encrypt(payload,key);'
       - 'CryptoJS.AES.encrypt(payload,"S7nthetic/passphrase")'
       - 'crypto.AES.decrypt(ciphertext,"S7nthetic/passphrase")'
+      - 'const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
+      - 'function e(p,a="S7nthetic/pass123"){const k=c.enc.Utf8.parse(a);return c.AES.decrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'
       - 'var displayName = "A1!bcdefghijklmn";'
@@ -134,10 +190,13 @@ rules:
       - 'const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};send(env.REACT_APP_FORM_PASSPHRASE);'
       - 'CryptoJS.AES.encrypt(payload,"short1!")'
       - 'CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})'
+      - 'const a="S7nthetic/pass123";function e(p){const iv=c.enc.Utf8.parse(a);return c.AES.encrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString()}'
+      - 'function e(p,a="S7nthetic/pass123"){const iv=c.enc.Utf8.parse(a);return c.AES.decrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
     description: >
       A client-side cryptographic key or passphrase candidate was found in
       JavaScript. The detector covers semantic AES/crypto/cipher key names,
       quoted hex-encoded AES key properties, narrow minified AES length-guard
       patterns, React configuration values proven to flow into an AES call,
-      literal AES key/passphrase arguments, and the observed g_ac convention
+      literal AES key/passphrase arguments, CryptoJS Utf8-parsed passphrases
+      proven to flow into AES, and the observed g_ac convention
       while avoiding generic key and string matches.
