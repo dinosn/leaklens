@@ -79,6 +79,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "CryptoJS comma-declared parsed passphrase constant flows into AES key",
+			content: `const c=loadCrypto(),a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}`,
+			want:    true,
+		},
+		{
 			name:    "CryptoJS default parameter passphrase flows into AES key",
 			content: `function e(p,a="S7nthetic/pass123"){const k=c.enc.Utf8.parse(a);return c.AES.decrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}`,
 			want:    true,

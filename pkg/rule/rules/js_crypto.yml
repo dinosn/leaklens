@@ -90,7 +90,6 @@ rules:
         )
         ["'] \s* (?:,|\))
       |
-        (?:var|let|const) \s+
         (?P<parsed_crypto_key_source>[A-Za-z_$][\w$]{0,63})
         \s* = \s*
         ["']
@@ -178,6 +177,7 @@ rules:
       - 'CryptoJS.AES.encrypt(payload,"S7nthetic/passphrase")'
       - 'crypto.AES.decrypt(ciphertext,"S7nthetic/passphrase")'
       - 'const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
+      - 'const c=loadCrypto(),a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'function e(p,a="S7nthetic/pass123"){const k=c.enc.Utf8.parse(a);return c.AES.decrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'
