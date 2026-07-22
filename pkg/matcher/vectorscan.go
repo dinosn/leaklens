@@ -480,8 +480,7 @@ func (m *VectorscanMatcher) matchChunk(content []byte, blobID types.BlobID, opts
 		}
 		lastEnd := -1
 		for match != nil {
-			start := match.Index
-			end := start + match.Length
+			start, end := regexp2ByteSpan(contentStr, match)
 
 			// Prevent infinite loops on zero-length matches
 			if start <= lastEnd {
@@ -627,8 +626,7 @@ func (m *VectorscanMatcher) buildMatchFromRegexp2(
 	rule *types.Rule,
 	re2match *regexp2.Match,
 ) *types.Match {
-	start := re2match.Index
-	end := start + re2match.Length
+	start, end := regexp2ByteSpan(string(content), re2match)
 
 	// Extract positional and named capture groups
 	groups, namedGroups := m.extractGroupsFromMatch(re2match, rule)

@@ -143,10 +143,40 @@ rules:
           \k<default_crypto_alias> \s* \. \s* (?:mode|pad) \s* \.
         )
       |
-        (?P<crypto_key_name>
-          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
+        (?P<pbkdf2_passphrase_name>
+          passphrase
           |
-          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:key|secret)[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
+          pass_phrase
+          |
+          password_phrase
+          |
+          secret_phrase
+        )
+        \s* (?:=|:) \s*
+        ["']
+        (?P<pbkdf2_passphrase>
+          (?=[^"'\\\r\n]{8,128}["'])
+          (?=[^"'\\\r\n]*[A-Za-z])
+          (?=[^"'\\\r\n]*(?:[0-9]|[^A-Za-z0-9"'\\\r\n]))
+          [^"'\\\r\n]{8,128}
+        )
+        ["']
+        (?=
+          [\s\S]{0,1600}
+          (?P<pbkdf2_key_var>[A-Za-z_$][\w$]{0,63})
+          \s* = \s*
+          (?P<pbkdf2_crypto_alias>[A-Za-z_$][\w$]{0,63})
+          \s* \. \s* PBKDF2
+          \s* \( \s* \k<pbkdf2_passphrase_name> \b
+          [\s\S]{0,2000}
+          \k<pbkdf2_crypto_alias> \s* \. \s* AES \s* \. \s* encrypt
+          \s* \( [^,;\r\n]{1,700} , \s* \k<pbkdf2_key_var> \b
+        )
+      |
+        (?P<crypto_key_name>
+          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:aes|crypto|cipher)[\w$]*(?:key|secret|passphrase|token))[A-Za-z_$][\w$]*
+          |
+          (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:key|secret|passphrase|token)[\w$]*(?:aes|crypto|cipher))[A-Za-z_$][\w$]*
           |
           (?=[A-Za-z_$][\w$]*)(?=[\w$]*(?:secretkey|secret_key))[A-Za-z_$][\w$]*
         )
@@ -179,6 +209,7 @@ rules:
       - 'const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'const c=loadCrypto(),a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'function e(p,a="S7nthetic/pass123"){const k=c.enc.Utf8.parse(a);return c.AES.decrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
+      - 'const passPhrase="Synthet!c Pass";const key=CryptoJS.PBKDF2(passPhrase,CryptoJS.enc.Hex.parse(salt),{keySize:4,iterations:10000});const encrypted=CryptoJS.AES.encrypt(password,key,{iv:iv});'
     negative_examples:
       - 'var g_ac = "abcdefghijklmnop";'
       - 'var displayName = "A1!bcdefghijklmn";'
@@ -192,11 +223,14 @@ rules:
       - 'CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})'
       - 'const a="S7nthetic/pass123";function e(p){const iv=c.enc.Utf8.parse(a);return c.AES.encrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString()}'
       - 'function e(p,a="S7nthetic/pass123"){const iv=c.enc.Utf8.parse(a);return c.AES.decrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
+      - 'const consultaEstablecimientosDesplegableServicio_v1_URI = "/v1/establecimientos/desplegable";'
+      - 'const passPhrase="Synthet!c Pass";send(passPhrase);'
+      - 'const iv="0123456789abcdef0123456789abcdef";const key=CryptoJS.PBKDF2(runtimePass,CryptoJS.enc.Hex.parse(iv),{keySize:4});CryptoJS.AES.encrypt(password,key,{iv:ivWord});'
     description: >
       A client-side cryptographic key or passphrase candidate was found in
       JavaScript. The detector covers semantic AES/crypto/cipher key names,
       quoted hex-encoded AES key properties, narrow minified AES length-guard
       patterns, React configuration values proven to flow into an AES call,
       literal AES key/passphrase arguments, CryptoJS Utf8-parsed passphrases
-      proven to flow into AES, and the observed g_ac convention
+      and PBKDF2-derived passphrases proven to flow into AES, and the observed g_ac convention
       while avoiding generic key and string matches.

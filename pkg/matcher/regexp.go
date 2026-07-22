@@ -84,8 +84,7 @@ func (m *RegexpMatcher) MatchWithBlobID(content []byte, blobID types.BlobID) ([]
 
 		// Loop through all matches
 		for match != nil {
-			start := match.Index
-			end := start + match.Length
+			start, end := regexp2ByteSpan(contentStr, match)
 
 			// Extract capture groups (positional, for backwards compatibility)
 			var groups [][]byte

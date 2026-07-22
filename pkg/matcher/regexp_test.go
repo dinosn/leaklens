@@ -147,6 +147,33 @@ func TestMatch_FindingID_Populated(t *testing.T) {
 	assert.Equal(t, "59141806118796593f3d14bae57834b794d3421b", match.FindingID)
 }
 
+func TestPortableRegexp_OffsetsUseBytesForUnicodeContent(t *testing.T) {
+	rules := []*types.Rule{
+		{
+			ID:      "unicode-offset-rule",
+			Name:    "Unicode Offset Rule",
+			Pattern: `secretKey\s*=\s*"([^"]+)"`,
+		},
+	}
+	content := []byte("línea con acento\nconst secretKey = \"a1bcdefghijklmno\";\n")
+
+	matcher, err := NewPortableRegexp(rules, 1)
+	require.NoError(t, err)
+
+	matches, err := matcher.Match(content)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	wantStart := strings.Index(string(content), "secretKey")
+	require.NotEqual(t, -1, wantStart)
+	wantMatching := []byte(`secretKey = "a1bcdefghijklmno"`)
+
+	match := matches[0]
+	assert.Equal(t, int64(wantStart), match.Location.Offset.Start)
+	assert.Equal(t, wantMatching, match.Snippet.Matching)
+	assert.Contains(t, string(match.Snippet.Before), "línea con acento")
+}
+
 // TestPortableRegexp_TimeoutIsTolerated verifies that a regex timeout on one rule
 // does NOT kill the scan; matches from other rules are still returned.
 func TestPortableRegexp_TimeoutIsTolerated(t *testing.T) {

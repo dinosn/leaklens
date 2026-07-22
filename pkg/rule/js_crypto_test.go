@@ -89,6 +89,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "PBKDF2 passphrase flows into AES key",
+			content: `const passPhrase="Synthet!c Pass";const key=CryptoJS.PBKDF2(passPhrase,CryptoJS.enc.Hex.parse(salt),{keySize:4,iterations:10000});const encrypted=CryptoJS.AES.encrypt(password,key,{iv:iv});`,
+			want:    true,
+		},
+		{
 			name:    "g_ac low complexity",
 			content: `var g_ac = "abcdefghijklmnop";`,
 			want:    false,
@@ -146,6 +151,21 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "parsed default parameter used only as iv is not AES key",
 			content: `function e(p,a="S7nthetic/pass123"){const iv=c.enc.Utf8.parse(a);return c.AES.decrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}`,
+			want:    false,
+		},
+		{
+			name:    "Spanish endpoint name containing aes substring is not AES key",
+			content: `const consultaEstablecimientosDesplegableServicio_v1_URI = "/v1/establecimientos/desplegable";`,
+			want:    false,
+		},
+		{
+			name:    "PBKDF2 passphrase without AES use is not key",
+			content: `const passPhrase="Synthet!c Pass";send(passPhrase);`,
+			want:    false,
+		},
+		{
+			name:    "PBKDF2 runtime passphrase with static iv is not key",
+			content: `const iv="0123456789abcdef0123456789abcdef";const key=CryptoJS.PBKDF2(runtimePass,CryptoJS.enc.Hex.parse(iv),{keySize:4});CryptoJS.AES.encrypt(password,key,{iv:ivWord});`,
 			want:    false,
 		},
 	}

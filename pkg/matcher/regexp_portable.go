@@ -128,8 +128,7 @@ func (m *PortableRegexpMatcher) matchSequential(content []byte, blobID types.Blo
 
 		// Loop through all matches
 		for match != nil {
-			start := match.Index
-			end := start + match.Length
+			start, end := regexp2ByteSpan(contentStr, match)
 
 			// Extract capture groups
 			groups := extractCaptureGroups(match)
@@ -221,8 +220,7 @@ func (m *PortableRegexpMatcher) matchParallel(content []byte, blobID types.BlobI
 
 				// Loop through all matches
 				for match != nil {
-					start := match.Index
-					end := start + match.Length
+					start, end := regexp2ByteSpan(contentStr, match)
 
 					// Extract capture groups and build result
 					groups := extractCaptureGroups(match)
