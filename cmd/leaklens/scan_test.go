@@ -49,6 +49,16 @@ func TestScanCommand_DefaultCrawlExtensionsIncludeSourceMaps(t *testing.T) {
 		"default crawl extensions should include source maps")
 }
 
+func TestScanCommand_DefaultCrawlTimeoutIsFiveMinutes(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"scan"})
+	require.NoError(t, err)
+
+	flag := cmd.Flags().Lookup("crawl-timeout")
+	require.NotNil(t, flag, "--crawl-timeout flag should exist")
+	assert.Equal(t, "5m", flag.DefValue,
+		"default crawl timeout should allow larger JS-heavy applications")
+}
+
 func TestScanCommand_DownloadDirFlagExists(t *testing.T) {
 	cmd, _, err := rootCmd.Find([]string{"scan"})
 	require.NoError(t, err)

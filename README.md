@@ -32,7 +32,7 @@ Make sure that directory is in your `PATH`.
 Use a tagged release for stable version output:
 
 ```bash
-CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@v0.2.3
+CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@v0.2.4
 ```
 
 Use `@main` to install the latest tested LeakLens branch. The `@main` examples use `GOPROXY=direct` so the moving branch is resolved from GitHub instead of a possibly stale Go module proxy response. Main builds display as `main@<commit>` in `leaklens version`.
@@ -139,7 +139,7 @@ leaklens update --install
 
 `leaklens update --install` preserves the current build mode. A binary built with Vectorscan/Hyperscan runs the vectorscan `go install` command, while a portable binary runs the normal `go install` command. Both use `GOPROXY=direct` so `main` is resolved from GitHub.
 
-Tagged installs report the tag, such as `v0.2.3`. Main branch installs report `main@<commit>` instead of Go's raw pseudo-version.
+Tagged installs report the tag, such as `v0.2.4`. Main branch installs report `main@<commit>` instead of Go's raw pseudo-version.
 
 LeakLens also performs a short `main` branch check when a command starts. The automatic notification is written to stderr so scan output stays parseable. This matches the documented `go install ...@main` install path and reports whether the installed binary is built from the latest `main` commit. If the current build cannot be mapped to a commit, normal scans stay quiet and `leaklens update` reports that state explicitly.
 
@@ -195,7 +195,7 @@ This default profile enables:
 - `--crawl-depth=3`
 - `--crawl-concurrency=2`
 - `--crawl-rate-limit=3`
-- `--crawl-timeout=2m`
+- `--crawl-timeout=5m`
 - `--crawl-extensions=js,json,map`
 - `--crawl-scope=rdn`
 
@@ -318,7 +318,7 @@ Targets can be:
 | `--crawl-concurrency` | `2` | Concurrent crawl workers. |
 | `--crawl-rate-limit` | `3` | Maximum crawl requests per second. |
 | `--crawl-host-rate-limit` | `0` | Maximum requests per second per host. `0` uses `--crawl-rate-limit`. |
-| `--crawl-timeout` | `2m` | Maximum crawl duration. |
+| `--crawl-timeout` | `5m` | Maximum crawl duration. |
 | `--crawl-headless` | `false` | Use a headless browser for JS-heavy sites. |
 | `--crawl-js-crawl` | `true` | Parse JavaScript files for additional endpoints. |
 | `--crawl-extensions` | `js,json,map` | File extensions to collect and scan. |

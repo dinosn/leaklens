@@ -283,6 +283,24 @@ func TestNewCrawlEnumeratorDefaultExtensionsIncludeSourceMaps(t *testing.T) {
 	}
 }
 
+func TestShouldRunPostCrawlDiscoveryStopsAfterTimeout(t *testing.T) {
+	if shouldRunPostCrawlDiscovery(context.Background(), true, true) {
+		t.Fatal("post-crawl discovery should stop after crawl timeout")
+	}
+	if shouldRunPostCrawlDiscovery(context.Background(), false, false) {
+		t.Fatal("post-crawl discovery should stop when feature is disabled")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if shouldRunPostCrawlDiscovery(ctx, false, true) {
+		t.Fatal("post-crawl discovery should stop after context cancellation")
+	}
+	if !shouldRunPostCrawlDiscovery(context.Background(), false, true) {
+		t.Fatal("post-crawl discovery should run before timeout while enabled")
+	}
+}
+
 func TestExtractJSAssetURLsFindsWebpackRuntimeChunks(t *testing.T) {
 	base, err := url.Parse("https://app.example.test/static/js/main.11111111.js")
 	if err != nil {

@@ -46,7 +46,7 @@ const (
 	defaultCrawlDepth       = 3
 	defaultCrawlConcurrency = 2
 	defaultCrawlRateLimit   = 3
-	defaultCrawlTimeout     = "2m"
+	defaultCrawlTimeout     = "5m"
 	defaultCrawlExtensions  = "js,json,map"
 	defaultCrawlScope       = "rdn"
 	defaultDNSCheckTimeout  = 5 * time.Second

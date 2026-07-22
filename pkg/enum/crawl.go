@@ -320,6 +320,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			return ctx.Err()
 		}
 		if timedOut {
+			acceptingResults.Store(false)
 			warnf("Crawl stopped: timeout %s reached\n", e.Timeout)
 		} else {
 			// Crawl timeout or other non-fatal crawl errors: log and continue
@@ -329,10 +330,11 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	} else if timedOut {
 		// Crawl timeout or other non-fatal crawl errors: log and continue
 		// with whatever URLs were discovered before the error.
+		acceptingResults.Store(false)
 		warnf("Crawl stopped: timeout %s reached\n", e.Timeout)
 	}
 
-	if e.JSCrawl {
+	if shouldRunPostCrawlDiscovery(ctx, timedOut, e.JSCrawl) {
 		mu.Lock()
 		seedURLs := append([]string(nil), discoveredURLs...)
 		mu.Unlock()
@@ -340,7 +342,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			addDiscoveredURL(rawURL)
 		}
 	}
-	if extensionEnabled(e.Extensions, "map") {
+	if shouldRunPostCrawlDiscovery(ctx, timedOut, extensionEnabled(e.Extensions, "map")) {
 		mu.Lock()
 		seedURLs := append([]string(nil), discoveredURLs...)
 		mu.Unlock()
@@ -365,6 +367,13 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 
 	urlEnum := NewURLEnumeratorWithCandidates(finalCandidates, e.MaxSize)
 	return urlEnum.Enumerate(ctx, callback)
+}
+
+func shouldRunPostCrawlDiscovery(ctx context.Context, timedOut bool, enabled bool) bool {
+	if !enabled || timedOut {
+		return false
+	}
+	return ctx.Err() == nil
 }
 
 func (e *CrawlEnumerator) discoverInitialAssetURLs(ctx context.Context) ([]string, error) {
