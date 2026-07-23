@@ -15,13 +15,6 @@ type Matcher interface {
 	Close() error
 }
 
-// AESCiphertextEvidence is owner-supplied ciphertext used to validate a
-// detected AES-ECB/PKCS7 password wrapper without performing a live request.
-type AESCiphertextEvidence struct {
-	Ciphertext []byte
-	Source     string
-}
-
 // Config for matcher initialization.
 type Config struct {
 	// Rules to compile and load into the matcher
@@ -32,8 +25,4 @@ type Config struct {
 
 	// ContextLines is the number of lines of context to extract before/after matches (0 = none)
 	ContextLines int
-
-	// AESCiphertexts are optional owner-supplied ciphertexts to decrypt with
-	// keys from proven AES-ECB/PKCS7 password flows.
-	AESCiphertexts []AESCiphertextEvidence
 }

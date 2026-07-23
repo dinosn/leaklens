@@ -32,7 +32,7 @@ Make sure that directory is in your `PATH`.
 Use a tagged release for stable version output:
 
 ```bash
-CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@v0.2.11
+CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@v0.2.12
 ```
 
 Use `@main` to install the latest tested LeakLens branch. The `@main` examples use `GOPROXY=direct` so the moving branch is resolved from GitHub instead of a possibly stale Go module proxy response. Main builds display as `main@<commit>` in `leaklens version`.
@@ -139,7 +139,7 @@ leaklens update --install
 
 `leaklens update --install` preserves the current build mode. A binary built with Vectorscan/Hyperscan runs the vectorscan `go install` command, while a portable binary runs the normal `go install` command. Both use `GOPROXY=direct` so `main` is resolved from GitHub.
 
-Tagged installs report the tag, such as `v0.2.11`. Main branch installs report `main@<commit>` instead of Go's raw pseudo-version.
+Tagged installs report the tag, such as `v0.2.12`. Main branch installs report `main@<commit>` instead of Go's raw pseudo-version.
 
 LeakLens also performs a short `main` branch check when a command starts. The automatic notification is written to stderr so scan output stays parseable. This matches the documented `go install ...@main` install path and reports whether the installed binary is built from the latest `main` commit. If the current build cannot be mapped to a commit, normal scans stay quiet and `leaklens update` reports that state explicitly.
 
@@ -202,17 +202,7 @@ This default profile enables:
 
 Browser runtime capture collects dynamically requested JS/JSON/source-map URLs, bounded text responses, storage snapshots, and common CryptoJS/WebCrypto observations before the normal crawler continues. A plaintext crypto input is reported only when the corresponding operation actually executes and is observable from the page context; values supplied later through a form are not present in a static bundle. Module-local crypto wrappers are still covered by static flow analysis. If Chrome cannot start because the browser is missing, sandboxing blocks it, or an attached DevTools endpoint fails, LeakLens prints one warning and continues with the standard crawler.
 
-### Validate Captured AES Ciphertext
-
-When authorized request evidence contains an AES ciphertext that is not embedded in the downloaded JavaScript, provide it separately so LeakLens can correlate it with detected password-encryption code:
-
-```bash
-leaklens scan ./downloaded-app --aes-ciphertext-file ./owner-evidence.txt
-```
-
-The evidence file accepts one base64 ciphertext per line and `#` comments. Use `-` to read evidence from stdin. A repeated `--aes-ciphertext` flag is also supported, but the file or stdin form avoids placing captured values in shell history and process arguments.
-
-LeakLens attempts decryption only when it has already proven an AES-ECB/PKCS7 password wrapper and found a standard 16, 24, or 32-byte key. It reports `password_value` only after strict PKCS#7 validation and printable UTF-8 validation succeed. The result is labeled as owner-supplied evidence, and the report states that the exact runtime call site was not observed. Invalid ciphertexts and ciphertexts that do not decrypt cleanly with a detected key are ignored.
+Static AES password-flow findings distinguish embedded values from runtime inputs. If a literal password is present in scanned content and passed to a proven password-encryption wrapper, LeakLens reports that literal. If the wrapper receives a form or variable value, LeakLens reports the hard-coded key, mode, padding, wrapper, input expression, and call location without attempting to infer or decrypt a value that is not in the scanned artifacts.
 
 To save crawled files as a readable website-style directory tree while scanning:
 
@@ -313,8 +303,6 @@ Targets can be:
 | `--store-blobs` | `false` | Store file contents under the datastore blob directory. |
 | `--download-dir` | | Write downloaded URL contents to a directory that preserves the website path structure. |
 | `--url-file` | | File containing URLs to scan, one per line. Use `-` for stdin. |
-| `--aes-ciphertext` | | Base64 AES ciphertext to correlate with detected password flows. Repeat as needed; prefer the file option to avoid command-line exposure. |
-| `--aes-ciphertext-file` | | File containing one base64 AES ciphertext per line. Use `-` for stdin. |
 | `--sqlite-row-limit` | `1000` | Max rows per SQLite table when extraction is enabled. Use `0` for unlimited. |
 
 ### Extraction Flags
