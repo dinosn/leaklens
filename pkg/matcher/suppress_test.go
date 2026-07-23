@@ -54,6 +54,23 @@ func TestGenericPasswordUIPromptSuppression(t *testing.T) {
 			content:    `const cfg={Password:"蓝色密码123"};`,
 			wantValues: []string{"蓝色密码123"},
 		},
+		{
+			name: "translated input type label",
+			content: `const labels={inputType:{color:"Color",date:"Date",email:"Email",month:"Month",` +
+				`number:"Number",password:"LocalizedPassLabel",range:"Range",tel:"Phone",text:"Text",` +
+				`time:"Time",url:"URL",week:"Week"}};`,
+			wantValues: []string{},
+		},
+		{
+			name:       "alphabetic password outside input type catalog still reports",
+			content:    `const cfg={username:"operator",password:"LocalizedPassLabel",host:"db.example.test"};`,
+			wantValues: []string{"LocalizedPassLabel"},
+		},
+		{
+			name:       "weak password matching property name still reports",
+			content:    `const cfg={username:"operator",password:"password"};`,
+			wantValues: []string{"password"},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -61,6 +78,55 @@ func TestGenericPasswordUIPromptSuppression(t *testing.T) {
 			matches, err := m.Match([]byte(tc.content))
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantValues, matchGroupValues(matches))
+		})
+	}
+}
+
+func TestLinkedInAccessTokenContextSuppression(t *testing.T) {
+	const token = "AQ0123456789abcdefghijklmnopqrstuv"
+	rules := loadMatcherRulesByID(t, "np.linkedin.3")
+
+	m, err := NewPortableRegexp(rules, 0)
+	require.NoError(t, err)
+	defer m.Close()
+
+	testCases := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{
+			name:    "base64 asset segment is not a LinkedIn token",
+			content: `const image="data:image/png;base64,abc/` + token + `/def";`,
+			want:    0,
+		},
+		{
+			name:    "unlabeled application string is not provider attribution",
+			content: `const generated="` + token + `";`,
+			want:    0,
+		},
+		{
+			name:    "provider-labeled token reports",
+			content: `const LINKEDIN_ACCESS_TOKEN="` + token + `";`,
+			want:    1,
+		},
+		{
+			name:    "bearer token reports",
+			content: `const headers={Authorization:"Bearer ` + token + `"};`,
+			want:    1,
+		},
+		{
+			name:    "bare token line reports",
+			content: token + "\n",
+			want:    1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, err := m.Match([]byte(tc.content))
+			require.NoError(t, err)
+			assert.Len(t, matches, tc.want)
 		})
 	}
 }
@@ -116,24 +182,28 @@ func TestShouldSuppressOpaqueSecretUsesNamedCapture(t *testing.T) {
 				RuleID:      ruleID,
 				NamedGroups: map[string][]byte{"token": []byte("example123456")},
 			}
-			assert.True(t, shouldSuppressMatch(match))
+			assert.True(t, shouldSuppressMatch(match, nil))
 
 			match.NamedGroups["token"] = []byte("4f9A2b7C8d1E6g")
-			assert.False(t, shouldSuppressMatch(match))
+			assert.False(t, shouldSuppressMatch(match, nil))
 		})
 	}
 }
 
 func loadGenericPasswordRules(t *testing.T) []*types.Rule {
+	return loadMatcherRulesByID(t, "np.generic.5", "np.generic.6")
+}
+
+func loadMatcherRulesByID(t *testing.T, ruleIDs ...string) []*types.Rule {
 	t.Helper()
 
 	loader := rule.NewLoader()
 	rules, err := loader.LoadBuiltinRules()
 	require.NoError(t, err)
 
-	wanted := map[string]bool{
-		"np.generic.5": true,
-		"np.generic.6": true,
+	wanted := make(map[string]bool, len(ruleIDs))
+	for _, ruleID := range ruleIDs {
+		wanted[ruleID] = true
 	}
 
 	filtered := make([]*types.Rule, 0, len(wanted))
@@ -144,7 +214,7 @@ func loadGenericPasswordRules(t *testing.T) []*types.Rule {
 		}
 	}
 
-	require.Empty(t, wanted, "missing built-in generic password rules")
+	require.Empty(t, wanted, "missing built-in matcher rules")
 	return filtered
 }
 

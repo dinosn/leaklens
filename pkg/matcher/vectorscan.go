@@ -507,7 +507,7 @@ func (m *VectorscanMatcher) matchChunk(content []byte, blobID types.BlobID, opts
 			newMatch := m.buildMatchFromRegexp2(content, blobID, rule, match)
 
 			// Deduplicate
-			if !shouldSuppressMatch(newMatch) && !dedup.IsDuplicate(newMatch) {
+			if !shouldSuppressMatch(newMatch, content) && !dedup.IsDuplicate(newMatch) {
 				dedup.Add(newMatch)
 				matches = append(matches, newMatch)
 				stat.Matches++
@@ -755,7 +755,7 @@ func (m *VectorscanMatcher) matchFallbackRules(content []byte, blobID types.Blob
 			lastEnd = end
 
 			newMatch := m.buildMatchFromRegexp2(content, blobID, rule, match)
-			if !shouldSuppressMatch(newMatch) {
+			if !shouldSuppressMatch(newMatch, content) {
 				matches = append(matches, newMatch)
 			}
 

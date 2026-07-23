@@ -138,7 +138,7 @@ func (m *PortableRegexpMatcher) matchSequential(content []byte, blobID types.Blo
 			result := buildMatchResult(blobID, rule, start, end, groups, namedGroups, content, m.contextLines)
 
 			// Deduplicate
-			if !shouldSuppressMatch(result) && !m.dedup.IsDuplicate(result) {
+			if !shouldSuppressMatch(result, content) && !m.dedup.IsDuplicate(result) {
 				m.dedup.Add(result)
 				matches = append(matches, result)
 			}
@@ -226,7 +226,7 @@ func (m *PortableRegexpMatcher) matchParallel(content []byte, blobID types.BlobI
 					groups := extractCaptureGroups(match)
 					namedGroups := extractNamedGroups(match, m.groupNameCache[rule.Pattern])
 					matchResult := buildMatchResult(blobID, rule, start, end, groups, namedGroups, content, m.contextLines)
-					if !shouldSuppressMatch(matchResult) {
+					if !shouldSuppressMatch(matchResult, content) {
 						workerMatches = append(workerMatches, matchResult)
 					}
 

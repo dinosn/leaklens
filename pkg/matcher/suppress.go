@@ -1,14 +1,16 @@
 package matcher
 
 import (
+	"bytes"
 	"math"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/dinosn/leaklens/pkg/types"
 )
 
-func shouldSuppressMatch(match *types.Match) bool {
+func shouldSuppressMatch(match *types.Match, content []byte) bool {
 	if match == nil {
 		return false
 	}
@@ -18,7 +20,10 @@ func shouldSuppressMatch(match *types.Match) bool {
 		if len(match.Groups) == 0 {
 			return false
 		}
-		return isGenericPasswordUIPrompt(string(match.Groups[0]))
+		return isGenericPasswordUIPrompt(string(match.Groups[0])) ||
+			isInputTypeTranslationLabel(match, content)
+	case "np.linkedin.3":
+		return !hasLinkedInAccessTokenContext(match, content)
 	case "leaklens.http.query-secret.1", "leaklens.http.api-key-header.1":
 		value := match.NamedGroups["token"]
 		if len(value) == 0 && len(match.Groups) > 0 {
@@ -28,6 +33,144 @@ func shouldSuppressMatch(match *types.Match) bool {
 	default:
 		return false
 	}
+}
+
+func isInputTypeTranslationLabel(match *types.Match, content []byte) bool {
+	if len(match.Groups) == 0 || !isShortLetterLabel(normalizePromptCandidate(string(match.Groups[0]))) {
+		return false
+	}
+
+	context := strings.ToLower(string(matchContextWindow(match, content, 512)))
+	context = strings.NewReplacer(
+		" ", "", "\t", "", "\r", "", "\n", "", `"`, "", `'`, "",
+	).Replace(context)
+	markers := []string{
+		"color:", "date:", "email:", "month:", "number:", "range:",
+		"tel:", "text:", "time:", "url:", "week:",
+	}
+	count := 0
+	for _, marker := range markers {
+		if strings.Contains(context, marker) {
+			count++
+		}
+	}
+	return count >= 6
+}
+
+func isShortLetterLabel(value string) bool {
+	if value == "" || len([]rune(value)) > 32 {
+		return false
+	}
+	for _, r := range value {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasLinkedInAccessTokenContext(match *types.Match, content []byte) bool {
+	token := string(match.NamedGroups["access_token"])
+	if token == "" || len(token) > 512 {
+		return false
+	}
+
+	start := int(match.Location.Offset.Start)
+	end := int(match.Location.Offset.End)
+	if isBareTokenLine(content, start, end, token) {
+		return true
+	}
+
+	before := strings.ToLower(string(matchContextBefore(match, content, 256)))
+	if strings.Contains(before, "linkedin") {
+		return true
+	}
+	if strings.Contains(before, "authorization") && strings.Contains(before, "bearer") {
+		return true
+	}
+	return containsAny(before, []string{"access_token", "access-token", "accesstoken"})
+}
+
+func isBareTokenLine(content []byte, start, end int, token string) bool {
+	const radius = 128
+	if len(content) == 0 || start < 0 || end < start || end > len(content) {
+		return false
+	}
+
+	prefixStart := start - radius
+	if prefixStart < 0 {
+		prefixStart = 0
+	}
+	prefix := content[prefixStart:start]
+	lineStart := prefixStart
+	if offset := bytes.LastIndexByte(prefix, '\n'); offset >= 0 {
+		lineStart = prefixStart + offset + 1
+	} else if prefixStart > 0 {
+		return false
+	}
+
+	suffixEnd := end + radius
+	if suffixEnd > len(content) {
+		suffixEnd = len(content)
+	}
+	lineEnd := suffixEnd
+	if offset := bytes.IndexByte(content[end:suffixEnd], '\n'); offset >= 0 {
+		lineEnd = end + offset
+	} else if suffixEnd < len(content) {
+		return false
+	}
+
+	line := strings.Trim(strings.TrimSpace(string(content[lineStart:lineEnd])), `"'`+"`;,")
+	return line == token
+}
+
+func matchContextWindow(match *types.Match, content []byte, radius int) []byte {
+	if len(content) == 0 {
+		before := match.Snippet.Before
+		after := match.Snippet.After
+		if len(before) > radius {
+			before = before[len(before)-radius:]
+		}
+		if len(after) > radius {
+			after = after[:radius]
+		}
+		window := make([]byte, 0, len(before)+len(match.Snippet.Matching)+len(after))
+		window = append(window, before...)
+		window = append(window, match.Snippet.Matching...)
+		return append(window, after...)
+	}
+
+	start := int(match.Location.Offset.Start) - radius
+	end := int(match.Location.Offset.End) + radius
+	if start < 0 {
+		start = 0
+	}
+	if end > len(content) {
+		end = len(content)
+	}
+	if start > end {
+		return nil
+	}
+	return content[start:end]
+}
+
+func matchContextBefore(match *types.Match, content []byte, radius int) []byte {
+	if len(content) == 0 {
+		before := match.Snippet.Before
+		if len(before) > radius {
+			before = before[len(before)-radius:]
+		}
+		return before
+	}
+	end := int(match.Location.Offset.Start)
+	if end < 0 || end > len(content) {
+		return nil
+	}
+	start := end - radius
+	if start < 0 {
+		start = 0
+	}
+	return content[start:end]
 }
 
 func isLikelyOpaqueSecretCandidate(value string) bool {
