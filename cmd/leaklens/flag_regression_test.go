@@ -91,6 +91,8 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldDownloadDir := scanDownloadDir
 	oldWorkers := scanWorkers
 	oldURLFile := scanURLFile
+	oldAESCiphertexts := append([]string(nil), scanAESCiphertexts...)
+	oldAESCiphertextFile := scanAESCiphertextFile
 	oldExtractMaxSize := extractMaxSize
 	oldExtractMaxTotal := extractMaxTotal
 	oldExtractMaxDepth := extractMaxDepth
@@ -131,6 +133,8 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanDownloadDir = oldDownloadDir
 		scanWorkers = oldWorkers
 		scanURLFile = oldURLFile
+		scanAESCiphertexts = oldAESCiphertexts
+		scanAESCiphertextFile = oldAESCiphertextFile
 		extractMaxSize = oldExtractMaxSize
 		extractMaxTotal = oldExtractMaxTotal
 		extractMaxDepth = oldExtractMaxDepth
@@ -171,6 +175,8 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanDownloadDir = ""
 	scanWorkers = 1
 	scanURLFile = ""
+	scanAESCiphertexts = nil
+	scanAESCiphertextFile = ""
 	extractMaxSize = "10MB"
 	extractMaxTotal = "100MB"
 	extractMaxDepth = 5

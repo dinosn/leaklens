@@ -114,6 +114,8 @@ var (
 	scanSQLiteRowLimit       int
 	scanWorkers              int
 	scanURLFile              string
+	scanAESCiphertexts       []string
+	scanAESCiphertextFile    string
 	scanCrawl                bool
 	scanCrawlDepth           int
 	scanCrawlConcurrency     int
@@ -184,6 +186,8 @@ func init() {
 	scanCmd.Flags().IntVar(&scanSQLiteRowLimit, "sqlite-row-limit", 1000, "Max rows per table for SQLite extraction (0 for unlimited)")
 	scanCmd.Flags().IntVar(&scanWorkers, "workers", runtime.NumCPU(), "Number of parallel scan workers")
 	scanCmd.Flags().StringVar(&scanURLFile, "url-file", "", "File containing URLs to scan, one per line (use - for stdin)")
+	scanCmd.Flags().StringArrayVar(&scanAESCiphertexts, "aes-ciphertext", nil, "Base64 AES ciphertext to correlate with detected password flows (repeatable; prefer --aes-ciphertext-file)")
+	scanCmd.Flags().StringVar(&scanAESCiphertextFile, "aes-ciphertext-file", "", "File containing base64 AES ciphertexts, one per line (use - for stdin)")
 
 	scanCmd.Flags().BoolVar(&scanCrawl, "crawl", false, "Crawl the target URL to discover files for scanning")
 	scanCmd.Flags().IntVar(&scanCrawlDepth, "crawl-depth", defaultCrawlDepth, "Maximum crawl depth")
@@ -485,6 +489,9 @@ func validateScanOptions() error {
 	if scanCrawlMaxDomainPages < 0 {
 		return fmt.Errorf("--crawl-max-domain-pages must be >= 0")
 	}
+	if scanURLFile == "-" && scanAESCiphertextFile == "-" {
+		return fmt.Errorf("--url-file and --aes-ciphertext-file cannot both read from stdin")
+	}
 	if scanAI {
 		if err := validateAIOptions(); err != nil {
 			return err
@@ -703,9 +710,14 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	}
 
 	// Create matcher
+	aesCiphertexts, err := loadScanAESCiphertexts()
+	if err != nil {
+		return err
+	}
 	m, err := matcher.New(matcher.Config{
-		Rules:        rules,
-		ContextLines: scanContextLines,
+		Rules:          rules,
+		ContextLines:   scanContextLines,
+		AESCiphertexts: aesCiphertexts,
 	})
 	if err != nil {
 		return fmt.Errorf("creating matcher: %w", err)
