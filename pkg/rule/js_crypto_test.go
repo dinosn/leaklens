@@ -199,6 +199,87 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 	}
 }
 
+func TestClientSideAESPasswordEncryptionFlow(t *testing.T) {
+	rule := loadBuiltinRuleByID(t, "leaklens.js.crypto.2")
+	m, err := matcher.NewPortableRegexp([]*types.Rule{rule}, 0)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		content    string
+		want       bool
+		wantInput  string
+		wantFnName string
+	}{
+		{
+			name:       "minified function encrypts old password with AES ECB PKCS7",
+			content:    `const c=CryptoJS,k="Synthet1cKeySeed";function bR(n){const e=c.enc.Utf8.parse(k);return c.AES.encrypt(n,e,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}const body={oldPassword:bR(form.oldPassword),newPassword:bR(form.newPassword)};`,
+			want:       true,
+			wantInput:  "form.oldPassword",
+			wantFnName: "bR",
+		},
+		{
+			name:       "assignment encrypts password property with AES ECB PKCS7",
+			content:    `const c=CryptoJS;function seal(v){const e=c.enc.Utf8.parse(secret);return c.AES.encrypt(v,e,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}request.password=seal(request.password);`,
+			want:       true,
+			wantInput:  "request.password",
+			wantFnName: "seal",
+		},
+		{
+			name:       "arrow encryptor handles pwd property",
+			content:    `const enc=p=>{const k=c.enc.Utf8.parse(secret);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()};payload.pwd=enc(payload.pwd);`,
+			want:       true,
+			wantInput:  "payload.pwd",
+			wantFnName: "enc",
+		},
+		{
+			name:    "password name without crypto wrapper",
+			content: `function bR(n){return encodeURIComponent(n)}const body={oldPassword:bR(form.oldPassword)};`,
+			want:    false,
+		},
+		{
+			name:    "CBC mode password encryption is left to other crypto rules",
+			content: `function bR(n){const e=CryptoJS.enc.Utf8.parse(k);return CryptoJS.AES.encrypt(n,e,{mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7}).toString()}const body={oldPassword:bR(form.oldPassword)};`,
+			want:    false,
+		},
+		{
+			name:    "ECB wrapper used for non-password token is not password flow",
+			content: `function bR(n){const e=CryptoJS.enc.Utf8.parse(k);return CryptoJS.AES.encrypt(n,e,{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7}).toString()}const body={token:bR(form.token)};`,
+			want:    false,
+		},
+		{
+			name:    "AES decrypt helper is not password encryption flow",
+			content: `function dec(n){const e=CryptoJS.enc.Utf8.parse(k);return CryptoJS.AES.decrypt(n,e,{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7}).toString(CryptoJS.enc.Utf8)}const body={password:dec(form.password)};`,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches, err := m.Match([]byte(tt.content))
+			require.NoError(t, err)
+			if tt.want {
+				require.Len(t, matches, 1)
+				require.Equal(t, "leaklens.js.crypto.2", matches[0].RuleID)
+
+				named := matches[0].NamedGroups
+				gotInput := string(named["aes_password_input"])
+				gotFn := string(named["aes_password_encryptor"])
+				if gotInput == "" {
+					gotInput = string(named["aes_password_input_arrow"])
+				}
+				if gotFn == "" {
+					gotFn = string(named["aes_password_encryptor_arrow"])
+				}
+				require.Equal(t, tt.wantInput, gotInput)
+				require.Equal(t, tt.wantFnName, gotFn)
+				return
+			}
+			require.Empty(t, matches)
+		})
+	}
+}
+
 func loadBuiltinRuleByID(t *testing.T, id string) *types.Rule {
 	t.Helper()
 	loader := NewLoader()

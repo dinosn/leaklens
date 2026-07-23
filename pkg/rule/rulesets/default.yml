@@ -72,6 +72,7 @@ rulesets:
   - np.generic.15     # Generic Secret
   - np.generic.16     # Generic Secret
   - leaklens.js.crypto.1 # Client-side AES key candidate
+  - leaklens.js.crypto.2 # Client-side AES password encryption flow
   - np.gitalk.1       # Gitalk OAuth Credentials
   - np.github.1       # GitHub Personal Access Token
   - np.github.2       # GitHub OAuth Access Token

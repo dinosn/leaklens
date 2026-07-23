@@ -61,6 +61,7 @@ type VectorscanMatcher struct {
 // compatible by moving the filtering logic to ignore_if_contains.
 var knownIncompatiblePatterns = map[string]bool{
 	"leaklens.js.crypto.1": true, // lookahead-heavy JavaScript crypto heuristic
+	"leaklens.js.crypto.2": true, // lookahead-heavy JavaScript crypto flow heuristic
 }
 
 // NewVectorscan creates a new Hyperscan/Vectorscan-based matcher.
