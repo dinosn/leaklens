@@ -62,17 +62,74 @@ func TestBrowserCaptureFallbackContinuesStandardCrawl(t *testing.T) {
 	}
 }
 
+func TestBrowserCaptureResponseBodyIsNotScannedTwice(t *testing.T) {
+	asset := []byte(`const syntheticValue = "browser-response-dedup";`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, `<script src="/assets/app.js"></script>`)
+		case "/assets/app.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write(asset)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	oldRunner := runBrowserRuntimeCapture
+	runBrowserRuntimeCapture = func(context.Context, *CrawlEnumerator) (browserCaptureResult, error) {
+		assetURL := server.URL + "/assets/app.js"
+		return browserCaptureResult{
+			URLs: []string{assetURL},
+			Blobs: []browserCaptureBlob{{
+				Content: asset,
+				Provenance: types.ExtendedProvenance{Payload: map[string]interface{}{
+					"kind": "browser_response",
+					"path": assetURL + "#browser-response",
+				}},
+			}},
+		}, nil
+	}
+	t.Cleanup(func() { runBrowserRuntimeCapture = oldRunner })
+
+	var count int
+	var path string
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:      server.URL,
+		Timeout:        2 * time.Second,
+		BrowserCapture: true,
+	})
+	err := enumerator.Enumerate(context.Background(), func(content []byte, _ types.BlobID, prov types.Provenance) error {
+		if bytes.Equal(content, asset) {
+			count++
+			path = prov.Path()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("crawl failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one scan of the duplicated browser response, got %d", count)
+	}
+	if path != server.URL+"/assets/app.js" {
+		t.Fatalf("expected canonical URL provenance, got %q", path)
+	}
+}
+
 func TestBrowserRuntimeCryptoBlobsIncludeShortECBKey(t *testing.T) {
 	events := []browserRuntimeEvent{
 		{
-			Seq:     1,
-			Kind:    "cryptojs_aes",
-			Method:  "CryptoJS.AES.encrypt",
-			Mode:    "ECB",
-			Padding: "Pkcs7",
-			Data:    browserRuntimeValue{Type: "string", Value: "P4ssw0rd!"},
-			Key:     browserRuntimeValue{Type: "string", Value: "SyntK3y!"},
-			Result:  browserRuntimeValue{Type: "string", Value: "U3ludGhldGljQ2lwaGVy"},
+			Seq:           1,
+			Kind:          "cryptojs_aes",
+			Method:        "CryptoJS.AES.encrypt",
+			Mode:          "ECB",
+			Padding:       "Pkcs7",
+			PasswordInput: true,
+			Data:          browserRuntimeValue{Type: "string", Value: "P4ssw0rd!"},
+			Key:           browserRuntimeValue{Type: "string", Value: "SyntK3y!"},
+			Result:        browserRuntimeValue{Type: "string", Value: "U3ludGhldGljQ2lwaGVy"},
 		},
 	}
 
@@ -92,6 +149,38 @@ func TestBrowserRuntimeCryptoBlobsIncludeShortECBKey(t *testing.T) {
 	}
 	if got := blobs[0].Provenance.Path(); !strings.HasPrefix(got, "browser-runtime://app.example.test/crypto/") {
 		t.Fatalf("unexpected runtime provenance path: %s", got)
+	}
+}
+
+func TestBrowserRuntimeCryptoBlobDoesNotLabelGenericDataAsPassword(t *testing.T) {
+	content := string(browserRuntimeCryptoBlobContent(browserRuntimeEvent{
+		Kind:    "cryptojs_aes",
+		Method:  "CryptoJS.AES.encrypt",
+		Mode:    "ECB",
+		Padding: "Pkcs7",
+		Data:    browserRuntimeValue{Type: "string", Value: "Synthet1cPayload"},
+		Key:     browserRuntimeValue{Type: "string", Value: "SyntK3y!"},
+	}, nil))
+	if strings.Contains(content, "runtime_crypto_password") {
+		t.Fatalf("generic AES data should not be labeled as a password:\n%s", content)
+	}
+	if !strings.Contains(content, `leaklens_runtime_crypto_data = "Synthet1cPayload"`) {
+		t.Fatalf("generic AES data should remain available for key analysis:\n%s", content)
+	}
+}
+
+func TestBrowserRuntimeCryptoBlobDoesNotLabelDecryptInputAsPassword(t *testing.T) {
+	content := string(browserRuntimeCryptoBlobContent(browserRuntimeEvent{
+		Kind:          "cryptojs_aes",
+		Method:        "CryptoJS.AES.decrypt",
+		Mode:          "ECB",
+		Padding:       "Pkcs7",
+		PasswordInput: true,
+		Data:          browserRuntimeValue{Type: "string", Value: "Synthet1cCiphertext"},
+		Key:           browserRuntimeValue{Type: "string", Value: "SyntK3y!"},
+	}, nil))
+	if strings.Contains(content, "runtime_crypto_password") || strings.Contains(content, "CryptoJS.AES.encrypt") {
+		t.Fatalf("AES decrypt input should not be rendered as password encryption:\n%s", content)
 	}
 }
 
@@ -125,7 +214,7 @@ func TestBrowserRuntimeCaptureWithInstalledChrome(t *testing.T) {
 		switch r.URL.Path {
 		case "/":
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<script src="/assets/app.js"></script>`)
+			fmt.Fprint(w, `<input type="password" value="P4ssw0rd!"><script src="/assets/app.js"></script>`)
 		case "/assets/app.js":
 			w.Header().Set("Content-Type", "application/javascript")
 			fmt.Fprint(w, `

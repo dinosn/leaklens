@@ -280,6 +280,68 @@ func TestClientSideAESPasswordEncryptionFlow(t *testing.T) {
 	}
 }
 
+func TestClientSideAESPasswordEncryptionFlowReportsEveryCallSite(t *testing.T) {
+	rule := loadBuiltinRuleByID(t, "leaklens.js.crypto.2")
+	m, err := matcher.New(matcher.Config{Rules: []*types.Rule{rule}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, m.Close()) })
+
+	content := []byte(`const c=CryptoJS,k="Synthet1cKeySeed";function seal(v){const w=c.enc.Utf8.parse(k);return c.AES.encrypt(v,w,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}const change={oldPassword:seal(form.oldPassword),newPassword:seal(form.newPassword)};const login={password:seal(login.password)};`)
+	matches, err := m.Match(content)
+	require.NoError(t, err)
+	require.Len(t, matches, 3)
+
+	inputs := make(map[string]bool)
+	for _, match := range matches {
+		require.Equal(t, "Synthet1cKeySeed", string(match.NamedGroups["aes_key"]))
+		require.Equal(t, "runtime input; not embedded in scanned content", string(match.NamedGroups["password_value_source"]))
+		inputs[string(match.NamedGroups["password_input"])] = true
+	}
+	require.Equal(t, map[string]bool{
+		"form.oldPassword": true,
+		"form.newPassword": true,
+		"login.password":   true,
+	}, inputs)
+}
+
+func TestClientSideAESPasswordEncryptionFlowCapturesRuntimeValues(t *testing.T) {
+	rule := loadBuiltinRuleByID(t, "leaklens.js.crypto.2")
+	m, err := matcher.NewPortableRegexp([]*types.Rule{rule}, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, m.Close()) })
+
+	content := []byte(`const leaklens_runtime_crypto_mode = "ECB"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_password = "Synthet1cPass!"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed"; const leaklens_runtime_crypto_ciphertext = "U3ludGhldGljQ2lwaGVy";`)
+	matches, err := m.Match(content)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	require.Equal(t, "Synthet1cPass!", string(matches[0].NamedGroups["runtime_aes_password"]))
+	require.Equal(t, "Synthet1cKeySeed", string(matches[0].NamedGroups["runtime_aes_key"]))
+	require.Equal(t, "U3ludGhldGljQ2lwaGVy", string(matches[0].NamedGroups["runtime_aes_ciphertext"]))
+
+	withoutCiphertext := []byte(`const leaklens_runtime_crypto_mode = "ECB"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_password = "Synthet1cPass!"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed";`)
+	matches, err = m.Match(withoutCiphertext)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	require.Equal(t, "Synthet1cPass!", string(matches[0].NamedGroups["runtime_aes_password"]))
+	require.Equal(t, "Synthet1cKeySeed", string(matches[0].NamedGroups["runtime_aes_key"]))
+}
+
+func TestClientSideAESPasswordEncryptionFlowRejectsUnprovenRuntimeContext(t *testing.T) {
+	rule := loadBuiltinRuleByID(t, "leaklens.js.crypto.2")
+	m, err := matcher.NewPortableRegexp([]*types.Rule{rule}, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, m.Close()) })
+
+	for _, content := range [][]byte{
+		[]byte(`const leaklens_runtime_crypto_mode = "CBC"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_password = "Synthet1cPass!"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed";`),
+		[]byte(`const leaklens_runtime_crypto_mode = "ECB"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_data = "Synthet1cPayload"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed";`),
+	} {
+		matches, err := m.Match(content)
+		require.NoError(t, err)
+		require.Empty(t, matches)
+	}
+}
+
 func loadBuiltinRuleByID(t *testing.T, id string) *types.Rule {
 	t.Helper()
 	loader := NewLoader()

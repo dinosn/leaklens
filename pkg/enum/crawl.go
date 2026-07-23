@@ -3,6 +3,7 @@ package enum
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -384,18 +385,49 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	warnf("Crawl complete: discovered %d unique %s file(s), downloading and scanning...\n",
 		len(finalURLs), strings.Join(e.Extensions, "/"))
 
-	for _, blob := range runtimeBlobs {
-		content := append([]byte(nil), blob.Content...)
-		if len(content) == 0 || int64(len(content)) > e.MaxSize {
-			continue
-		}
-		if err := callback(content, types.ComputeBlobID(content), blob.Provenance); err != nil {
-			return err
+	downloadedBlobIDs := make(map[types.BlobID]struct{})
+	var urlErr error
+	if len(finalCandidates) > 0 {
+		urlEnum := NewURLEnumeratorWithCandidates(finalCandidates, e.MaxSize)
+		urlErr = urlEnum.Enumerate(ctx, func(content []byte, blobID types.BlobID, prov types.Provenance) error {
+			mu.Lock()
+			downloadedBlobIDs[blobID] = struct{}{}
+			mu.Unlock()
+			return callback(content, blobID, prov)
+		})
+		if urlErr != nil && !errors.Is(urlErr, errAllURLFetchesFailed) {
+			return urlErr
 		}
 	}
 
-	urlEnum := NewURLEnumeratorWithCandidates(finalCandidates, e.MaxSize)
-	return urlEnum.Enumerate(ctx, callback)
+	runtimeBlobIDs := make(map[types.BlobID]struct{})
+	runtimeEmitted := 0
+	for _, blob := range runtimeBlobs {
+		content := append([]byte(nil), blob.Content...)
+		if len(content) == 0 || (e.MaxSize > 0 && int64(len(content)) > e.MaxSize) {
+			continue
+		}
+		blobID := types.ComputeBlobID(content)
+		if _, ok := downloadedBlobIDs[blobID]; ok {
+			continue
+		}
+		if _, ok := runtimeBlobIDs[blobID]; ok {
+			continue
+		}
+		runtimeBlobIDs[blobID] = struct{}{}
+		if err := callback(content, blobID, blob.Provenance); err != nil {
+			return err
+		}
+		runtimeEmitted++
+	}
+
+	if urlErr != nil {
+		if runtimeEmitted == 0 {
+			return urlErr
+		}
+		warnf("warning: standard asset downloads failed; scanned %d unique browser-captured blob(s) instead\n", runtimeEmitted)
+	}
+	return nil
 }
 
 func shouldRunPostCrawlDiscovery(ctx context.Context, timedOut bool, enabled bool) bool {

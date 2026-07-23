@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1449,11 +1450,27 @@ func printFileMatches(cmd *cobra.Command, sty *styles, prov types.Provenance, ma
 
 		fmt.Fprintf(out, "  %s  %s\n", sty.ruleName.Sprint(ruleName), sty.heading.Sprint(lineInfo))
 
-		// Capture groups
-		for j, group := range match.Groups {
-			fmt.Fprintf(out, "    %s %s\n",
-				sty.heading.Sprintf("Group %d:", j+1),
-				sty.match.Sprint(string(group)))
+		// Crypto findings benefit from semantic labels: a variable name is not
+		// the same evidence as a concrete runtime or embedded value.
+		if strings.HasPrefix(match.RuleID, "leaklens.js.crypto.") && len(match.NamedGroups) > 0 {
+			keys := make([]string, 0, len(match.NamedGroups))
+			for name, value := range match.NamedGroups {
+				if len(value) > 0 {
+					keys = append(keys, name)
+				}
+			}
+			sort.Strings(keys)
+			for _, name := range keys {
+				fmt.Fprintf(out, "    %s %s\n",
+					sty.heading.Sprintf("%s:", name),
+					sty.match.Sprint(string(match.NamedGroups[name])))
+			}
+		} else {
+			for j, group := range match.Groups {
+				fmt.Fprintf(out, "    %s %s\n",
+					sty.heading.Sprintf("Group %d:", j+1),
+					sty.match.Sprint(string(group)))
+			}
 		}
 
 		// Context snippet

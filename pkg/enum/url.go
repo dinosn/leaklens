@@ -3,6 +3,7 @@ package enum
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/dinosn/leaklens/pkg/types"
 	"golang.org/x/sync/errgroup"
 )
+
+var errAllURLFetchesFailed = errors.New("all URL fetches failed")
 
 // URLEnumerator downloads content from HTTP(S) URLs and enumerates it for scanning.
 type URLEnumerator struct {
@@ -106,7 +109,7 @@ func (e *URLEnumerator) Enumerate(ctx context.Context, callback func(content []b
 		return origCtx.Err()
 	}
 	if len(e.URLCandidates) > 0 && successCount.Load() == 0 {
-		return fmt.Errorf("all URL fetches failed")
+		return errAllURLFetchesFailed
 	}
 	return nil
 }

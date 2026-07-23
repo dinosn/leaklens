@@ -44,18 +44,19 @@ type browserResponseMeta struct {
 }
 
 type browserRuntimeEvent struct {
-	Seq         int                    `json:"seq"`
-	Kind        string                 `json:"kind"`
-	Method      string                 `json:"method"`
-	Mode        string                 `json:"mode"`
-	Padding     string                 `json:"padding"`
-	Data        browserRuntimeValue    `json:"data"`
-	Key         browserRuntimeValue    `json:"key"`
-	Result      browserRuntimeValue    `json:"result"`
-	Value       browserRuntimeValue    `json:"value"`
-	Algorithm   map[string]interface{} `json:"algorithm"`
-	Extractable bool                   `json:"extractable"`
-	Usages      []string               `json:"usages"`
+	Seq           int                    `json:"seq"`
+	Kind          string                 `json:"kind"`
+	Method        string                 `json:"method"`
+	Mode          string                 `json:"mode"`
+	Padding       string                 `json:"padding"`
+	PasswordInput bool                   `json:"passwordInput"`
+	Data          browserRuntimeValue    `json:"data"`
+	Key           browserRuntimeValue    `json:"key"`
+	Result        browserRuntimeValue    `json:"result"`
+	Value         browserRuntimeValue    `json:"value"`
+	Algorithm     map[string]interface{} `json:"algorithm"`
+	Extractable   bool                   `json:"extractable"`
+	Usages        []string               `json:"usages"`
 }
 
 type browserRuntimeValue struct {
@@ -445,6 +446,7 @@ func browserRuntimeCryptoBlobContent(event browserRuntimeEvent, recentUtf8 []bro
 	if method == "" {
 		method = "CryptoJS.AES"
 	}
+	isEncrypt := strings.HasSuffix(strings.ToLower(method), ".encrypt")
 	mode := normalizeCryptoMode(event.Mode)
 	padding := normalizeCryptoPadding(event.Padding)
 	key := event.Key.Value
@@ -464,13 +466,17 @@ func browserRuntimeCryptoBlobContent(event browserRuntimeEvent, recentUtf8 []bro
 	if padding != "" {
 		fmt.Fprintf(&b, "const leaklens_runtime_crypto_padding = %q;\n", padding)
 	}
-	if event.Data.Value != "" {
+	inputName := "leaklens_runtime_crypto_data"
+	if isEncrypt && event.PasswordInput && event.Data.Value != "" {
 		fmt.Fprintf(&b, "const leaklens_runtime_crypto_password = %q;\n", event.Data.Value)
+		inputName = "leaklens_runtime_crypto_password"
+	} else if event.Data.Value != "" {
+		fmt.Fprintf(&b, "const leaklens_runtime_crypto_data = %q;\n", event.Data.Value)
 	}
 	if key != "" {
 		fmt.Fprintf(&b, "const leaklens_runtime_crypto_key = %q;\n", key)
-		if mode != "" && padding != "" {
-			fmt.Fprintf(&b, "CryptoJS.AES.encrypt(leaklens_runtime_crypto_password, %q, {mode: CryptoJS.mode.%s, padding: CryptoJS.pad.%s});\n", key, mode, padding)
+		if isEncrypt && event.Data.Value != "" && mode != "" && padding != "" {
+			fmt.Fprintf(&b, "CryptoJS.AES.encrypt(%s, %q, {mode: CryptoJS.mode.%s, padding: CryptoJS.pad.%s});\n", inputName, key, mode, padding)
 		}
 	}
 	if event.Result.Value != "" {
@@ -629,6 +635,15 @@ func browserRuntimeHookScript() string {
     } catch (_) {}
     return fallback;
   };
+  const isPasswordInputValue = (value) => {
+    try {
+      const rendered = valueOf(value).value;
+      if (!rendered || !document || typeof document.querySelectorAll !== "function") return false;
+      return Array.from(document.querySelectorAll('input[type="password"]')).some(input => input.value === rendered);
+    } catch (_) {
+      return false;
+    }
+  };
   const hookCryptoJS = (crypto) => {
     try {
       if (!crypto || crypto.__leaklensHooked) return;
@@ -657,7 +672,8 @@ func browserRuntimeHookScript() string {
                 key: valueOf(key),
                 result: valueOf(result),
                 mode: cryptoName(options && options.mode, ""),
-                padding: cryptoName(options && options.padding, "")
+                padding: cryptoName(options && options.padding, ""),
+                passwordInput: method === "encrypt" && isPasswordInputValue(data)
               });
             }
           };

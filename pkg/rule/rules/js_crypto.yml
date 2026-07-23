@@ -263,6 +263,32 @@ rules:
       (?x)(?i)
       \b
       (?:
+        leaklens_runtime_crypto_mode \s* = \s*
+        "(?P<runtime_aes_mode>ECB)"
+        (?=
+          [\s\S]{0,2400}
+          leaklens_runtime_crypto_padding \s* = \s*
+          "(?P<runtime_aes_padding>Pkcs7)"
+        )
+        (?=
+          [\s\S]{0,2400}
+          leaklens_runtime_crypto_password \s* = \s*
+          "(?P<runtime_aes_password>(?:\\.|[^"\\]){1,512})"
+        )
+        (?=
+          [\s\S]{0,3200}
+          leaklens_runtime_crypto_key \s* = \s*
+          "(?P<runtime_aes_key>(?:\\.|[^"\\]){8,512})"
+        )
+        (?:
+          (?=
+            [\s\S]{0,4000}
+            leaklens_runtime_crypto_ciphertext \s* = \s*
+            "(?P<runtime_aes_ciphertext>(?:\\.|[^"\\]){8,2048})"
+          )
+          |
+        )
+      |
         function \s+
         (?P<aes_password_encryptor>[A-Za-z_$][\w$]{0,63})
         \s* \(
@@ -275,7 +301,15 @@ rules:
           \s* = \s*
           (?P<aes_password_alias>[A-Za-z_$][\w$]{0,63})
           \s* \. \s* enc \s* \. \s* Utf8 \s* \. \s* parse
-          \s* \(
+          \s* \( \s*
+          (?:
+            "(?P<aes_password_static_key_double>(?:\\.|[^"\\]){8,256})"
+            |
+            '(?P<aes_password_static_key_single>(?:\\.|[^'\\]){8,256})'
+            |
+            (?P<aes_password_key_source>[A-Za-z_$][\w$]{0,63})
+          )
+          \s* \)
         )
         (?=
           [\s\S]{0,5200}
@@ -296,26 +330,28 @@ rules:
           [\s\S]{0,2200}
           padding \s* : \s* \k<aes_password_alias> \s* \. \s* pad \s* \. \s* Pkcs7
         )
-        [\s\S]{0,24000}?
-        \k<aes_password_encryptor> \s* \( \s*
-        (?P<aes_password_input>
-          (?: [A-Za-z_$][\w$]{0,63} \s* \. \s* )?
-          (?:
-            oldPassword
-            |
-            newPassword
-            |
-            currentPassword
-            |
-            confirmPassword
-            |
-            password
-            |
-            passwd
-            |
-            pwd
-          )
-        ) \b
+        (?=
+          [\s\S]{0,24000}?
+          \k<aes_password_encryptor> \s* \( \s*
+          (?P<aes_password_input>
+            (?: [A-Za-z_$][\w$]{0,63} \s* \. \s* )?
+            (?:
+              oldPassword
+              |
+              newPassword
+              |
+              currentPassword
+              |
+              confirmPassword
+              |
+              password
+              |
+              passwd
+              |
+              pwd
+            )
+          ) \b
+        )
       |
         (?P<aes_password_encryptor_arrow>[A-Za-z_$][\w$]{0,63})
         \s* = \s*
@@ -329,7 +365,15 @@ rules:
           \s* = \s*
           (?P<aes_password_alias_arrow>[A-Za-z_$][\w$]{0,63})
           \s* \. \s* enc \s* \. \s* Utf8 \s* \. \s* parse
-          \s* \(
+          \s* \( \s*
+          (?:
+            "(?P<aes_password_static_key_double_arrow>(?:\\.|[^"\\]){8,256})"
+            |
+            '(?P<aes_password_static_key_single_arrow>(?:\\.|[^'\\]){8,256})'
+            |
+            (?P<aes_password_key_source_arrow>[A-Za-z_$][\w$]{0,63})
+          )
+          \s* \)
         )
         (?=
           [\s\S]{0,5200}
@@ -350,26 +394,28 @@ rules:
           [\s\S]{0,2200}
           padding \s* : \s* \k<aes_password_alias_arrow> \s* \. \s* pad \s* \. \s* Pkcs7
         )
-        [\s\S]{0,24000}?
-        \k<aes_password_encryptor_arrow> \s* \( \s*
-        (?P<aes_password_input_arrow>
-          (?: [A-Za-z_$][\w$]{0,63} \s* \. \s* )?
-          (?:
-            oldPassword
-            |
-            newPassword
-            |
-            currentPassword
-            |
-            confirmPassword
-            |
-            password
-            |
-            passwd
-            |
-            pwd
-          )
-        ) \b
+        (?=
+          [\s\S]{0,24000}?
+          \k<aes_password_encryptor_arrow> \s* \( \s*
+          (?P<aes_password_input_arrow>
+            (?: [A-Za-z_$][\w$]{0,63} \s* \. \s* )?
+            (?:
+              oldPassword
+              |
+              newPassword
+              |
+              currentPassword
+              |
+              confirmPassword
+              |
+              password
+              |
+              passwd
+              |
+              pwd
+            )
+          ) \b
+        )
       )
     categories:
       - js
@@ -377,6 +423,7 @@ rules:
       - appsec
       - fuzzy
     examples:
+      - 'const leaklens_runtime_crypto_mode = "ECB"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_password = "Synthet1cPass!"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed"; const leaklens_runtime_crypto_ciphertext = "U3ludGhldGljQ2lwaGVy";'
       - 'function bR(n){const e=CryptoJS.enc.Utf8.parse(k);return CryptoJS.AES.encrypt(n,e,{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7}).toString()}form={oldPassword:bR(values.oldPassword),newPassword:bR(values.newPassword)};'
       - 'function seal(v){const e=c.enc.Utf8.parse(secret);return c.AES.encrypt(v,e,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}request.password=seal(request.password);'
       - 'const enc=p=>{const k=c.enc.Utf8.parse(secret);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()};payload.pwd=enc(payload.pwd);'
@@ -384,9 +431,14 @@ rules:
       - 'function bR(n){return encodeURIComponent(n)}form={oldPassword:bR(values.oldPassword)};'
       - 'function bR(n){const e=CryptoJS.enc.Utf8.parse(k);return CryptoJS.AES.encrypt(n,e,{mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7}).toString()}form={oldPassword:bR(values.oldPassword)};'
       - 'function bR(n){const e=CryptoJS.enc.Utf8.parse(k);return CryptoJS.AES.encrypt(n,e,{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7}).toString()}form={token:bR(values.token)};'
+      - 'const leaklens_runtime_crypto_mode = "CBC"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_password = "Synthet1cPass!"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed";'
+      - 'const leaklens_runtime_crypto_mode = "ECB"; const leaklens_runtime_crypto_padding = "Pkcs7"; const leaklens_runtime_crypto_data = "Synthet1cPayload"; const leaklens_runtime_crypto_key = "Synthet1cKeySeed";'
     description: >
       Browser-side JavaScript encrypts password-named input through an AES
       ECB/PKCS7 wrapper. This is reported as an application security review
       signal because the protection depends on client-delivered code and should
       be validated server-side rather than treated as a replacement for TLS or
-      normal authentication controls.
+      normal authentication controls. Static findings identify each password
+      call site and its embedded key while distinguishing runtime form input
+      from a literal value. Browser-observed calls include the concrete input,
+      key, and ciphertext when those values are actually available.
