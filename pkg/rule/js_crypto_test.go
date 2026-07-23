@@ -74,6 +74,16 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "short literal AES ECB PKCS7 passphrase",
+			content: `CryptoJS.AES.encrypt(password,"SyntK3y!",{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7})`,
+			want:    true,
+		},
+		{
+			name:    "short CryptoJS alias parsed passphrase constant flows into AES key",
+			content: `const a="SyntK3y!";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}`,
+			want:    true,
+		},
+		{
 			name:    "CryptoJS alias parsed passphrase constant flows into AES key",
 			content: `const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}`,
 			want:    true,
@@ -136,6 +146,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "short AES argument",
 			content: `CryptoJS.AES.encrypt(payload,"short1!")`,
+			want:    false,
+		},
+		{
+			name:    "short AES CBC argument",
+			content: `CryptoJS.AES.encrypt(payload,"short1!",{mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7})`,
 			want:    false,
 		},
 		{

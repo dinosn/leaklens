@@ -100,6 +100,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	oldCrawlRateLimit := scanCrawlRateLimit
 	oldCrawlHostRateLimit := scanCrawlHostRateLimit
 	oldCrawlMaxDomainPages := scanCrawlMaxDomainPages
+	oldCrawlBrowserCapture := scanCrawlBrowserCapture
 	oldJSIntel := scanJSIntel
 	oldJSIntelSourceMaps := scanJSIntelSourceMaps
 	oldJSIntelGeneric := scanJSIntelGeneric
@@ -139,6 +140,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 		scanCrawlRateLimit = oldCrawlRateLimit
 		scanCrawlHostRateLimit = oldCrawlHostRateLimit
 		scanCrawlMaxDomainPages = oldCrawlMaxDomainPages
+		scanCrawlBrowserCapture = oldCrawlBrowserCapture
 		scanJSIntel = oldJSIntel
 		scanJSIntelSourceMaps = oldJSIntelSourceMaps
 		scanJSIntelGeneric = oldJSIntelGeneric
@@ -178,6 +180,7 @@ func setScanGlobalsForRegression(t *testing.T, rulePath, outputPath string) {
 	scanCrawlRateLimit = 3
 	scanCrawlHostRateLimit = 0
 	scanCrawlMaxDomainPages = 0
+	scanCrawlBrowserCapture = true
 	scanJSIntel = false
 	scanJSIntelSourceMaps = true
 	scanJSIntelGeneric = false

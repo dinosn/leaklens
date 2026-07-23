@@ -65,6 +65,7 @@ type CrawlEnumerator struct {
 	AutomaticFormFill  bool
 	AuthCredentials    string
 	UseInstalledChrome bool
+	BrowserCapture     bool
 }
 
 // CrawlConfig holds configuration for the crawl enumerator.
@@ -90,6 +91,7 @@ type CrawlConfig struct {
 	AutomaticFormFill  bool
 	AuthCredentials    string
 	UseInstalledChrome bool
+	BrowserCapture     bool
 }
 
 // NewCrawlEnumerator creates a new enumerator that crawls a target URL.
@@ -131,6 +133,7 @@ func NewCrawlEnumerator(cfg CrawlConfig) *CrawlEnumerator {
 		AutomaticFormFill:  cfg.AutomaticFormFill,
 		AuthCredentials:    cfg.AuthCredentials,
 		UseInstalledChrome: cfg.UseInstalledChrome,
+		BrowserCapture:     cfg.BrowserCapture,
 	}
 }
 
@@ -301,6 +304,22 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	warnf("Crawling %s (%s, depth=%d, extensions=%s)...\n",
 		e.TargetURL, mode, e.MaxDepth, strings.Join(e.Extensions, ","))
 
+	var runtimeBlobs []browserCaptureBlob
+	if e.BrowserCapture {
+		result, err := runBrowserRuntimeCapture(ctx, e)
+		if err != nil {
+			warnf("warning: browser runtime capture unavailable; continuing with standard crawl only: %v\n", err)
+		} else {
+			for _, rawURL := range result.URLs {
+				addDiscoveredURL(rawURL)
+			}
+			runtimeBlobs = append(runtimeBlobs, result.Blobs...)
+			if len(result.Blobs) > 0 {
+				warnf("  runtime: captured %d browser observation blob(s)\n", len(result.Blobs))
+			}
+		}
+	}
+
 	initialURLs, initialErr := e.discoverInitialAssetURLs(ctx)
 	if initialErr != nil {
 		warnf("warning: initial HTML asset discovery failed: %v\n", initialErr)
@@ -357,13 +376,23 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	finalCandidates := append([][]string(nil), discoveredCandidates...)
 	mu.Unlock()
 
-	if len(finalURLs) == 0 {
+	if len(finalURLs) == 0 && len(runtimeBlobs) == 0 {
 		warnf("Crawl complete: no matching files found\n")
 		return nil
 	}
 
 	warnf("Crawl complete: discovered %d unique %s file(s), downloading and scanning...\n",
 		len(finalURLs), strings.Join(e.Extensions, "/"))
+
+	for _, blob := range runtimeBlobs {
+		content := append([]byte(nil), blob.Content...)
+		if len(content) == 0 || int64(len(content)) > e.MaxSize {
+			continue
+		}
+		if err := callback(content, types.ComputeBlobID(content), blob.Provenance); err != nil {
+			return err
+		}
+	}
 
 	urlEnum := NewURLEnumeratorWithCandidates(finalCandidates, e.MaxSize)
 	return urlEnum.Enumerate(ctx, callback)

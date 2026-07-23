@@ -133,6 +133,7 @@ var (
 	scanCrawlAutoFormFill    bool
 	scanCrawlAuth            string
 	scanCrawlInstalledChrome bool
+	scanCrawlBrowserCapture  bool
 	scanJSIntel              bool
 	scanJSIntelSourceMaps    bool
 	scanJSIntelGeneric       bool
@@ -203,6 +204,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanCrawlNoSandbox, "crawl-no-sandbox", false, "Run headless Chrome with --no-sandbox (auto-enabled when running as root)")
 	scanCmd.Flags().BoolVar(&scanCrawlAutoFormFill, "crawl-automatic-form-fill", false, "Enable automatic form filling and submission")
 	scanCmd.Flags().StringVar(&scanCrawlAuth, "crawl-auth", "", "username:password for automatic crawl login")
+	scanCmd.Flags().BoolVar(&scanCrawlBrowserCapture, "crawl-browser-capture", true, "Use a best-effort browser runtime pass to capture dynamic assets, text responses, storage, and common crypto calls")
 
 	scanCmd.Flags().BoolVar(&scanJSIntel, "js-intel", false, "Extract JS intelligence artifacts and rescan inline source-map sources")
 	scanCmd.Flags().BoolVar(&scanJSIntelSourceMaps, "js-intel-source-maps", true, "When --js-intel is enabled, parse inline source maps and scan embedded sources")
@@ -242,7 +244,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 			"crawl-rate-limit", "crawl-host-rate-limit", "crawl-timeout", "crawl-extensions",
 			"crawl-scope", "crawl-base-url", "crawl-max-domain-pages", "crawl-chrome-data-dir",
 			"crawl-chrome-ws-url", "crawl-system-chrome-path", "crawl-use-installed-chrome",
-			"crawl-no-incognito", "crawl-no-sandbox", "crawl-automatic-form-fill", "crawl-auth"}
+			"crawl-no-incognito", "crawl-no-sandbox", "crawl-automatic-form-fill", "crawl-auth",
+			"crawl-browser-capture"}
 		for _, name := range crawlFlags {
 			if cmd.Flags().Changed(name) {
 				scanCrawl = true
@@ -418,6 +421,7 @@ func runCrawlScan(cmd *cobra.Command, targetURL string) error {
 		AutomaticFormFill:  scanCrawlAutoFormFill,
 		AuthCredentials:    scanCrawlAuth,
 		UseInstalledChrome: scanCrawlInstalledChrome,
+		BrowserCapture:     scanCrawlBrowserCapture,
 	})
 
 	return runEnumeratorScan(cmd, enumerator)

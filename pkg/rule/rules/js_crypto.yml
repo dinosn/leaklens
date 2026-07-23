@@ -82,6 +82,26 @@ rules:
         AES \s* \. \s* (?:encrypt|decrypt)
         \s* \( [^,;\r\n]{1,600} , \s*
         ["']
+        (?P<inline_ecb_aes_passphrase>
+          (?=[^\s"'\\]{8,128}["'])
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
+          [^\s"'\\]{8,128}
+        )
+        ["'] \s* ,
+        (?=
+          [\s\S]{0,700}
+          mode \s* : \s* [A-Za-z_$][\w$]{0,63} \s* \. \s* mode \s* \. \s* ECB
+        )
+        (?=
+          [\s\S]{0,700}
+          padding \s* : \s* [A-Za-z_$][\w$]{0,63} \s* \. \s* pad \s* \. \s* Pkcs7
+        )
+      |
+        (?:[A-Za-z_$][\w$]{0,63} \s* \. \s*)?
+        AES \s* \. \s* (?:encrypt|decrypt)
+        \s* \( [^,;\r\n]{1,600} , \s*
+        ["']
         (?P<inline_aes_passphrase>
           (?=[^\s"'\\]{12,128}["'])
           (?=[^\s"'\\]*[A-Za-z])
@@ -94,10 +114,10 @@ rules:
         \s* = \s*
         ["']
         (?P<parsed_crypto_key>
-          (?=[^\s"'\\]{12,128}["'])
+          (?=[^\s"'\\]{8,128}["'])
           (?=[^\s"'\\]*[A-Za-z])
           (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
-          [^\s"'\\]{12,128}
+          [^\s"'\\]{8,128}
         )
         ["']
         (?=
@@ -121,10 +141,10 @@ rules:
           \s* = \s*
           ["']
           (?P<default_crypto_key>
-            (?=[^\s"'\\]{12,128}["'])
+            (?=[^\s"'\\]{8,128}["'])
             (?=[^\s"'\\]*[A-Za-z])
             (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
-            [^\s"'\\]{12,128}
+            [^\s"'\\]{8,128}
           )
           ["']
           [^)]{0,600}?
@@ -206,6 +226,8 @@ rules:
       - 'const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};const key=env.REACT_APP_FORM_PASSPHRASE;CryptoJS.AES.encrypt(payload,key);'
       - 'CryptoJS.AES.encrypt(payload,"S7nthetic/passphrase")'
       - 'crypto.AES.decrypt(ciphertext,"S7nthetic/passphrase")'
+      - 'CryptoJS.AES.encrypt(password,"SyntK3y!",{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7})'
+      - 'const a="SyntK3y!";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'const c=loadCrypto(),a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'function e(p,a="S7nthetic/pass123"){const k=c.enc.Utf8.parse(a);return c.AES.decrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
@@ -220,6 +242,7 @@ rules:
       - 'const env={REACT_APP_PUBLIC_WIDGET_KEY:"PublicClient42Value"};render(env.REACT_APP_PUBLIC_WIDGET_KEY);'
       - 'const env={REACT_APP_FORM_PASSPHRASE:"S7nthetic/passphrase"};send(env.REACT_APP_FORM_PASSPHRASE);'
       - 'CryptoJS.AES.encrypt(payload,"short1!")'
+      - 'CryptoJS.AES.encrypt(payload,"short1!",{mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7})'
       - 'CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})'
       - 'const a="S7nthetic/pass123";function e(p){const iv=c.enc.Utf8.parse(a);return c.AES.encrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString()}'
       - 'function e(p,a="S7nthetic/pass123"){const iv=c.enc.Utf8.parse(a);return c.AES.decrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
