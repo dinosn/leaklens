@@ -4,7 +4,7 @@ LeakLens is a web-aware secrets scanner for source code, Git history, local file
 
 The idea started from the original [Praetorian Titus](https://github.com/praetorian-inc/titus) codebase. LeakLens keeps the high-performance secret scanning engine and rule lineage, then extends that foundation into a web-app workflow around crawling, JavaScript discovery, source-map recovery, JS intelligence artifacts, and AI-assisted review.
 
-LeakLens crawling is based on [ProjectDiscovery Katana](https://github.com/projectdiscovery/katana), with LeakLens-specific discovery and repair logic layered on top. The crawler now augments Katana output with initial-response scanning, inline HTML asset extraction, recursive JSON manifest parsing, JavaScript bundle expansion, lazy chunk discovery, same-host URL repair, escaped-path normalization, and downloaded-asset mirroring before scanning. JS intelligence remains a separate informational layer; LeakLens secret findings still come from the scanner rule engine.
+LeakLens crawling was initially built on [ProjectDiscovery Katana](https://github.com/projectdiscovery/katana) and has since evolved into a broader LeakLens-specific discovery and asset-recovery pipeline. The crawler now augments Katana output with initial-response scanning, inline HTML asset extraction, recursive JSON manifest parsing, JavaScript bundle expansion, lazy chunk discovery, same-host URL repair, escaped-path normalization, and downloaded-asset mirroring before scanning. JS intelligence remains a separate informational layer; LeakLens secret findings still come from the scanner rule engine.
 
 Use LeakLens only on codebases, repositories, and websites you are authorized to test.
 
@@ -32,7 +32,7 @@ Make sure that directory is in your `PATH`.
 Use a tagged release for stable version output:
 
 ```bash
-CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@v0.2.14
+CGO_ENABLED=1 go install -tags vectorscan github.com/dinosn/leaklens/cmd/leaklens@v0.2.15
 ```
 
 Use `@main` to install the latest tested LeakLens branch. The `@main` examples use `GOPROXY=direct` so the moving branch is resolved from GitHub instead of a possibly stale Go module proxy response. Main builds display as `main@<commit>` in `leaklens version`.
@@ -139,7 +139,7 @@ leaklens update --install
 
 `leaklens update --install` preserves the current build mode. A binary built with Vectorscan/Hyperscan runs the vectorscan `go install` command, while a portable binary runs the normal `go install` command. Both use `GOPROXY=direct` so `main` is resolved from GitHub.
 
-Tagged installs report the tag, such as `v0.2.14`. Main branch installs report `main@<commit>` instead of Go's raw pseudo-version.
+Tagged installs report the tag, such as `v0.2.15`. Main branch installs report `main@<commit>` instead of Go's raw pseudo-version.
 
 LeakLens also performs a short `main` branch check when a command starts. The automatic notification is written to stderr so scan output stays parseable. This matches the documented `go install ...@main` install path and reports whether the installed binary is built from the latest `main` commit. If the current build cannot be mapped to a commit, normal scans stay quiet and `leaklens update` reports that state explicitly.
 
