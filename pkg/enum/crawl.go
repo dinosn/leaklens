@@ -69,6 +69,12 @@ type CrawlEnumerator struct {
 	BrowserCapture     bool
 }
 
+type initialPageDiscovery struct {
+	URLs    []string
+	Content []byte
+	URL     string
+}
+
 // CrawlConfig holds configuration for the crawl enumerator.
 type CrawlConfig struct {
 	TargetURL          string
@@ -305,7 +311,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	warnf("Crawling %s (%s, depth=%d, extensions=%s)...\n",
 		e.TargetURL, mode, e.MaxDepth, strings.Join(e.Extensions, ","))
 
-	var runtimeBlobs []browserCaptureBlob
+	var supplementalBlobs []browserCaptureBlob
 	if e.BrowserCapture {
 		result, err := runBrowserRuntimeCapture(ctx, e)
 		if err != nil {
@@ -314,19 +320,26 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			for _, rawURL := range result.URLs {
 				addDiscoveredURL(rawURL)
 			}
-			runtimeBlobs = append(runtimeBlobs, result.Blobs...)
+			supplementalBlobs = append(supplementalBlobs, result.Blobs...)
 			if len(result.Blobs) > 0 {
 				warnf("  runtime: captured %d browser observation blob(s)\n", len(result.Blobs))
 			}
 		}
 	}
 
-	initialURLs, initialErr := e.discoverInitialAssetURLs(ctx)
+	initialPage, initialErr := e.discoverInitialPage(ctx)
 	if initialErr != nil {
 		warnf("warning: initial HTML asset discovery failed: %v\n", initialErr)
 	} else {
-		for _, rawURL := range initialURLs {
+		for _, rawURL := range initialPage.URLs {
 			addDiscoveredURL(rawURL)
+		}
+		if len(initialPage.Content) > 0 && !isBinary(initialPage.Content) {
+			initialBlob := browserCaptureBlob{
+				Content:    initialPage.Content,
+				Provenance: types.URLProvenance{URL: initialPage.URL},
+			}
+			supplementalBlobs = append([]browserCaptureBlob{initialBlob}, supplementalBlobs...)
 		}
 	}
 	for _, rawURL := range e.discoverAssetManifestURLs(ctx) {
@@ -358,6 +371,12 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		mu.Lock()
 		seedURLs := append([]string(nil), discoveredURLs...)
 		mu.Unlock()
+		for _, rawURL := range e.discoverNestedJSONAssetURLs(ctx, seedURLs) {
+			addDiscoveredURL(rawURL)
+		}
+		mu.Lock()
+		seedURLs = append([]string(nil), discoveredURLs...)
+		mu.Unlock()
 		for _, rawURL := range e.discoverNestedJSAssetURLs(ctx, seedURLs) {
 			addDiscoveredURL(rawURL)
 		}
@@ -377,7 +396,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	finalCandidates := append([][]string(nil), discoveredCandidates...)
 	mu.Unlock()
 
-	if len(finalURLs) == 0 && len(runtimeBlobs) == 0 {
+	if len(finalURLs) == 0 && len(supplementalBlobs) == 0 {
 		warnf("Crawl complete: no matching files found\n")
 		return nil
 	}
@@ -400,9 +419,9 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		}
 	}
 
-	runtimeBlobIDs := make(map[types.BlobID]struct{})
-	runtimeEmitted := 0
-	for _, blob := range runtimeBlobs {
+	supplementalBlobIDs := make(map[types.BlobID]struct{})
+	supplementalEmitted := 0
+	for _, blob := range supplementalBlobs {
 		content := append([]byte(nil), blob.Content...)
 		if len(content) == 0 || (e.MaxSize > 0 && int64(len(content)) > e.MaxSize) {
 			continue
@@ -411,21 +430,21 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		if _, ok := downloadedBlobIDs[blobID]; ok {
 			continue
 		}
-		if _, ok := runtimeBlobIDs[blobID]; ok {
+		if _, ok := supplementalBlobIDs[blobID]; ok {
 			continue
 		}
-		runtimeBlobIDs[blobID] = struct{}{}
+		supplementalBlobIDs[blobID] = struct{}{}
 		if err := callback(content, blobID, blob.Provenance); err != nil {
 			return err
 		}
-		runtimeEmitted++
+		supplementalEmitted++
 	}
 
 	if urlErr != nil {
-		if runtimeEmitted == 0 {
+		if supplementalEmitted == 0 {
 			return urlErr
 		}
-		warnf("warning: standard asset downloads failed; scanned %d unique browser-captured blob(s) instead\n", runtimeEmitted)
+		warnf("warning: standard asset downloads failed; scanned %d unique supplemental crawl blob(s) instead\n", supplementalEmitted)
 	}
 	return nil
 }
@@ -438,6 +457,11 @@ func shouldRunPostCrawlDiscovery(ctx context.Context, timedOut bool, enabled boo
 }
 
 func (e *CrawlEnumerator) discoverInitialAssetURLs(ctx context.Context) ([]string, error) {
+	discovery, err := e.discoverInitialPage(ctx)
+	return discovery.URLs, err
+}
+
+func (e *CrawlEnumerator) discoverInitialPage(ctx context.Context) (initialPageDiscovery, error) {
 	timeout := 30 * time.Second
 	if e.Timeout > 0 && e.Timeout < timeout {
 		timeout = e.Timeout
@@ -446,30 +470,40 @@ func (e *CrawlEnumerator) discoverInitialAssetURLs(ctx context.Context) ([]strin
 	client := newTLSFallbackHTTPClient(timeout)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.TargetURL, nil)
 	if err != nil {
-		return nil, err
+		return initialPageDiscovery{}, err
 	}
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return initialPageDiscovery{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return e.filterInScope(extractHeaderAssetURLs(resp.Request.URL, resp.Header, e.Extensions)), nil
+		return initialPageDiscovery{
+			URLs: e.filterInScope(extractHeaderAssetURLs(resp.Request.URL, resp.Header, e.Extensions)),
+			URL:  resp.Request.URL.String(),
+		}, nil
 	}
 
 	reader := io.LimitReader(resp.Body, e.MaxSize+1)
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, err
+		return initialPageDiscovery{}, err
 	}
 	if int64(len(body)) > e.MaxSize {
-		return e.filterInScope(extractHeaderAssetURLs(resp.Request.URL, resp.Header, e.Extensions)), nil
+		return initialPageDiscovery{
+			URLs: e.filterInScope(extractHeaderAssetURLs(resp.Request.URL, resp.Header, e.Extensions)),
+			URL:  resp.Request.URL.String(),
+		}, nil
 	}
 
-	return e.filterInScope(extractHTMLAssetURLs(resp.Request.URL, resp.Header, body, e.Extensions)), nil
+	return initialPageDiscovery{
+		URLs:    e.filterInScope(extractHTMLAssetURLs(resp.Request.URL, resp.Header, body, e.Extensions)),
+		Content: body,
+		URL:     resp.Request.URL.String(),
+	}, nil
 }
 
 func (e *CrawlEnumerator) filterInScope(urls []string) []string {
@@ -546,9 +580,10 @@ func extractHTMLAssetURLs(base *url.URL, headers http.Header, body []byte, exten
 				scriptType := strings.ToLower(strings.TrimSpace(nodeAttr(n, "type")))
 				if src := nodeAttr(n, "src"); src != "" {
 					addResolvedAssetURL(&urls, base, src, extensions)
-				}
-				if scriptType == "importmap" {
+				} else if scriptType == "importmap" {
 					urls = append(urls, extractImportMapAssetURLs(base, nodeText(n), extensions)...)
+				} else {
+					urls = append(urls, extractJSAssetURLs(base, []byte(nodeText(n)), extensions)...)
 				}
 			case "link":
 				rel := nodeAttr(n, "rel")
@@ -657,6 +692,60 @@ func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURL
 	return discovered
 }
 
+func (e *CrawlEnumerator) discoverNestedJSONAssetURLs(ctx context.Context, seedURLs []string) []string {
+	if len(seedURLs) == 0 {
+		return nil
+	}
+	timeout := 30 * time.Second
+	if e.Timeout > 0 && e.Timeout < timeout {
+		timeout = e.Timeout
+	}
+	client := newTLSFallbackHTTPClient(timeout)
+	queued := make(map[string]bool)
+	seenAsset := make(map[string]bool)
+	queue := make([]string, 0, len(seedURLs))
+	for _, rawURL := range seedURLs {
+		seenAsset[rawURL] = true
+		if isJSONAssetURL(rawURL) {
+			queued[rawURL] = true
+			queue = append(queue, rawURL)
+		}
+	}
+
+	var discovered []string
+	for len(queue) > 0 && len(discovered) < maxNestedJSAssetDiscovery {
+		if ctx.Err() != nil {
+			return discovered
+		}
+		current := queue[0]
+		queue = queue[1:]
+		body, finalURL, err := fetchJSONAssetForDiscovery(ctx, client, current, e.MaxSize)
+		if err != nil || !json.Valid(body) {
+			continue
+		}
+		for _, candidate := range extractAssetManifestURLs(finalURL, body, e.Extensions) {
+			if len(discovered) >= maxNestedJSAssetDiscovery {
+				break
+			}
+			if !e.urlInScope(candidate) || seenAsset[candidate] {
+				continue
+			}
+			seenAsset[candidate] = true
+			discovered = append(discovered, candidate)
+			if isJSONAssetURL(candidate) && !queued[candidate] {
+				queued[candidate] = true
+				queue = append(queue, candidate)
+			}
+		}
+	}
+	return discovered
+}
+
+func isJSONAssetURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && strings.EqualFold(path.Ext(parsed.Path), ".json")
+}
+
 func (e *CrawlEnumerator) discoverSourceMapAssetURLs(ctx context.Context, seedURLs []string) []string {
 	if len(seedURLs) == 0 {
 		return nil
@@ -713,6 +802,35 @@ func fetchJSAssetForDiscovery(ctx context.Context, client *http.Client, rawURL s
 	}
 	if int64(len(body)) > maxSize {
 		return nil, nil, fmt.Errorf("JS asset too large")
+	}
+	return body, resp.Request.URL, nil
+}
+
+func fetchJSONAssetForDiscovery(ctx context.Context, client *http.Client, rawURL string, maxSize int64) ([]byte, *url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Accept", "application/json,*/*")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/html") {
+		return nil, nil, fmt.Errorf("unexpected HTML response")
+	}
+	reader := io.LimitReader(resp.Body, maxSize+1)
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	if int64(len(body)) > maxSize {
+		return nil, nil, fmt.Errorf("JSON asset too large")
 	}
 	return body, resp.Request.URL, nil
 }

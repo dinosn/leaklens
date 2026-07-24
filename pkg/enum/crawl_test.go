@@ -107,6 +107,7 @@ func TestCrawlInitialHTMLAssetDiscoveryFindsImportmapAndPreloadAssets(t *testing
     <link rel="preload" as="script" href="/assets/vendor/jquery.min-6c84fd2b.js">
     <link rel="stylesheet" href="/assets/application-347a7ab9.css">
     <script src="/assets/direct-script-22222222.js"></script>
+    <script>Ext.manifest = "app.json";</script>
   </head>
 </html>`)
 	}))
@@ -125,6 +126,7 @@ func TestCrawlInitialHTMLAssetDiscoveryFindsImportmapAndPreloadAssets(t *testing
 	sort.Strings(got)
 
 	want := []string{
+		server.URL + "/app/app.json",
 		server.URL + "/assets/application-b3af3ba5.js",
 		server.URL + "/assets/controllers/account_completion_controller-93a905a6.js",
 		server.URL + "/assets/controllers/reports_controller-e3257b8f.js",
@@ -137,6 +139,58 @@ func TestCrawlInitialHTMLAssetDiscoveryFindsImportmapAndPreloadAssets(t *testing
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected initial asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestCrawlInitialPageContentIsRetainedForScanning(t *testing.T) {
+	const page = `<!doctype html><script>const config={clientSecret:"Q7vN2mX9pR4sL8kD6wT3"};</script>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, page)
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL,
+		Extensions: []string{"js", "json"},
+		Scope:      "fqdn",
+	})
+
+	discovery, err := enumerator.discoverInitialPage(context.Background())
+	if err != nil {
+		t.Fatalf("discovering initial page: %v", err)
+	}
+	if discovery.URL != server.URL {
+		t.Fatalf("unexpected initial page URL: %q", discovery.URL)
+	}
+	if string(discovery.Content) != page {
+		t.Fatalf("initial page content was not retained: %q", discovery.Content)
+	}
+}
+
+func TestCrawlNestedJSONAssetDiscoveryFindsExtJSBundles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app.json":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"js":[{"path":"app.js"},{"path":"runtime.js"}],"css":[{"path":"theme.css"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL,
+		Extensions: []string{"js", "json"},
+		Scope:      "fqdn",
+	})
+
+	got := enumerator.discoverNestedJSONAssetURLs(context.Background(), []string{server.URL + "/app.json"})
+	sort.Strings(got)
+	want := []string{server.URL + "/app.js", server.URL + "/runtime.js"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected nested JSON assets:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

@@ -71,6 +71,8 @@ rulesets:
   - np.generic.14     # Generic Credentials
   - np.generic.15     # Generic Secret
   - np.generic.16     # Generic Secret
+  - leaklens.js.client-secret.1 # JavaScript client secret literal
+  - leaklens.js.basic-auth-flow.1 # Client-side Basic authentication credential flow
   - leaklens.js.crypto.1 # Client-side AES key candidate
   - leaklens.js.crypto.2 # Client-side AES password encryption flow
   - np.gitalk.1       # Gitalk OAuth Credentials

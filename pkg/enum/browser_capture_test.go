@@ -41,20 +41,20 @@ func TestBrowserCaptureFallbackContinuesStandardCrawl(t *testing.T) {
 	restoreLog := SetLogOutput(&logs)
 	defer restoreLog()
 
-	var paths []string
+	paths := make(map[string]bool)
 	enumerator := NewCrawlEnumerator(CrawlConfig{
 		TargetURL:      server.URL,
 		Timeout:        2 * time.Second,
 		BrowserCapture: true,
 	})
 	err := enumerator.Enumerate(context.Background(), func(content []byte, blobID types.BlobID, prov types.Provenance) error {
-		paths = append(paths, prov.Path())
+		paths[prov.Path()] = true
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("crawl should continue after browser fallback: %v", err)
 	}
-	if len(paths) != 1 || !strings.HasSuffix(paths[0], "/assets/app.js") {
+	if len(paths) != 2 || !paths[server.URL] || !paths[server.URL+"/assets/app.js"] {
 		t.Fatalf("fallback crawl did not scan expected asset: %#v", paths)
 	}
 	if got := logs.String(); !strings.Contains(got, "browser runtime capture unavailable; continuing with standard crawl only") {

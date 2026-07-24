@@ -13,7 +13,7 @@ const (
 	SchemaURI   = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 	Version     = "2.1.0"
 	ToolName    = "leaklens"
-	ToolVersion = "0.2.13"
+	ToolVersion = "0.2.14"
 )
 
 // Report is the top-level SARIF report structure

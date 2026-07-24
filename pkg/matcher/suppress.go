@@ -24,6 +24,12 @@ func shouldSuppressMatch(match *types.Match, content []byte) bool {
 			isInputTypeTranslationLabel(match, content)
 	case "np.linkedin.3":
 		return !hasLinkedInAccessTokenContext(match, content)
+	case "leaklens.js.client-secret.1":
+		value := match.NamedGroups["client_secret"]
+		if len(value) == 0 && len(match.Groups) > 0 {
+			value = match.Groups[len(match.Groups)-1]
+		}
+		return !isLikelyClientSecretCandidate(string(value))
 	case "leaklens.http.query-secret.1", "leaklens.http.api-key-header.1":
 		value := match.NamedGroups["token"]
 		if len(value) == 0 && len(match.Groups) > 0 {
@@ -33,6 +39,24 @@ func shouldSuppressMatch(match *types.Match, content []byte) bool {
 	default:
 		return false
 	}
+}
+
+func isLikelyClientSecretCandidate(value string) bool {
+	if !isLikelyOpaqueSecretCandidate(value) {
+		return false
+	}
+
+	compact := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(value))
+	return !containsAny(compact, []string{
+		"yourclientsecret",
+		"clientsecrethere",
+		"testsecret",
+		"mocksecret",
+		"fakesecret",
+		"demosecret",
+		"notasecret",
+		"secretvalue",
+	})
 }
 
 func isInputTypeTranslationLabel(match *types.Match, content []byte) bool {
