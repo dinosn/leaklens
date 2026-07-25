@@ -79,6 +79,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "direct UTF8 parsed literal flows into AES key argument",
+			content: `function encryptPayload(value){var key=CryptoJS.enc.Utf8.parse("Synthet1cKeySeed");var input=CryptoJS.enc.Utf8.parse(value);return CryptoJS.AES.encrypt(input,key,{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7}).toString()}`,
+			want:    true,
+		},
+		{
 			name:    "short CryptoJS alias parsed passphrase constant flows into AES key",
 			content: `const a="SyntK3y!";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}`,
 			want:    true,
@@ -156,6 +161,11 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 		{
 			name:    "passphrase label is not AES argument",
 			content: `CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})`,
+			want:    false,
+		},
+		{
+			name:    "direct UTF8 parsed literal used as IV is not AES key",
+			content: `var iv=CryptoJS.enc.Utf8.parse("Synthet1cIVSeed!");CryptoJS.AES.encrypt(payload,runtimeKey,{iv:iv,mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7})`,
 			want:    false,
 		},
 		{
