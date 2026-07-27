@@ -225,14 +225,16 @@ func (l *Loader) LoadBuiltinRulesets() ([]*types.Ruleset, error) {
 // convertYAMLRule converts yamlRule to types.Rule and computes StructuralID.
 func convertYAMLRule(yr yamlRule) *types.Rule {
 	r := &types.Rule{
-		ID:               yr.ID,
-		Name:             yr.Name,
-		Pattern:          yr.Pattern,
-		Description:      yr.Description,
-		Examples:         yr.Examples,
-		NegativeExamples: yr.NegativeExamples,
-		References:       yr.References,
-		Categories:       yr.Categories,
+		ID:                  yr.ID,
+		Name:                yr.Name,
+		Pattern:             yr.Pattern,
+		Description:         yr.Description,
+		Examples:            yr.Examples,
+		NegativeExamples:    yr.NegativeExamples,
+		References:          yr.References,
+		Categories:          yr.Categories,
+		MinEntropy:          yr.MinEntropy,
+		PatternRequirements: yr.PatternRequirements,
 	}
 	r.StructuralID = r.ComputeStructuralID()
 	return r

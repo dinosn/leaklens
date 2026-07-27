@@ -2,6 +2,7 @@ package rule
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 
 	"github.com/dinosn/leaklens/pkg/types"
@@ -24,6 +25,12 @@ func ValidateRule(r *types.Rule) error {
 	if r.Pattern == "" {
 		return fmt.Errorf("rule pattern is required")
 	}
+	if math.IsNaN(r.MinEntropy) || math.IsInf(r.MinEntropy, 0) || r.MinEntropy < 0 {
+		return fmt.Errorf("rule %s has invalid min_entropy: %v", r.ID, r.MinEntropy)
+	}
+	if err := validatePatternRequirements(r.ID, r.PatternRequirements); err != nil {
+		return err
+	}
 
 	// Validate pattern is a valid regex
 	_, err := regexp.Compile(r.Pattern)
@@ -36,6 +43,34 @@ func ValidateRule(r *types.Rule) error {
 	if r.StructuralID != "" && r.StructuralID != expectedID {
 		return fmt.Errorf("rule %s has inconsistent StructuralID: got %s, expected %s",
 			r.ID, r.StructuralID, expectedID)
+	}
+
+	return nil
+}
+
+func validatePatternRequirements(ruleID string, requirements *types.PatternRequirements) error {
+	if requirements == nil {
+		return nil
+	}
+
+	for name, value := range map[string]*int{
+		"min_digits":        requirements.MinDigits,
+		"min_uppercase":     requirements.MinUppercase,
+		"min_lowercase":     requirements.MinLowercase,
+		"min_special_chars": requirements.MinSpecialChars,
+	} {
+		if value != nil && *value < 0 {
+			return fmt.Errorf("rule %s has negative %s", ruleID, name)
+		}
+	}
+
+	if checksum := requirements.Checksum; checksum != nil {
+		if checksum.Actual.Template == "" {
+			return fmt.Errorf("rule %s checksum actual template is required", ruleID)
+		}
+		if checksum.Expected == "" {
+			return fmt.Errorf("rule %s checksum expected template is required", ruleID)
+		}
 	}
 
 	return nil

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dinosn/leaklens/pkg/jsintel"
 	"github.com/dinosn/leaklens/pkg/types"
 	sqlite "modernc.org/sqlite"
 )
@@ -164,6 +165,82 @@ func (s *SQLiteStore) GetFindings() ([]*types.Finding, error) {
 		return []*types.Finding{}, nil
 	}
 	return result, rows.Err()
+}
+
+func (s *SQLiteStore) AddJSIntelFinding(f *jsintel.StoredFinding) error {
+	if f == nil {
+		return fmt.Errorf("JS-intelligence finding is nil")
+	}
+	active := 0
+	if f.Active {
+		active = 1
+	}
+	_, err := s.e.Exec(`
+		INSERT INTO leaklens_js_intel_findings
+			(id, blob_id, category, value, detail, method, confidence, environment, line, column, active)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			category = excluded.category,
+			value = excluded.value,
+			detail = excluded.detail,
+			method = excluded.method,
+			confidence = excluded.confidence,
+			environment = excluded.environment,
+			line = excluded.line,
+			column = excluded.column,
+			active = excluded.active`,
+		f.ID, f.BlobID.Hex(), string(f.Category), f.Value, f.Detail, f.Method,
+		f.Confidence, f.Environment, f.Line, f.Column, active,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetJSIntelFindings() ([]*jsintel.StoredFinding, error) {
+	rows, err := s.e.Query(`
+		SELECT id, blob_id, category, value, COALESCE(detail, ''), COALESCE(method, ''), confidence,
+		       COALESCE(environment, ''), COALESCE(line, 0), COALESCE(column, 0), active
+		FROM leaklens_js_intel_findings
+		ORDER BY blob_id, category, value, line, column, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*jsintel.StoredFinding
+	for rows.Next() {
+		var finding jsintel.StoredFinding
+		var blobIDHex, category string
+		var active int
+		if err := rows.Scan(
+			&finding.ID,
+			&blobIDHex,
+			&category,
+			&finding.Value,
+			&finding.Detail,
+			&finding.Method,
+			&finding.Confidence,
+			&finding.Environment,
+			&finding.Line,
+			&finding.Column,
+			&active,
+		); err != nil {
+			return nil, err
+		}
+		finding.BlobID, err = types.ParseBlobID(blobIDHex)
+		if err != nil {
+			return nil, fmt.Errorf("parsing JS-intelligence blob ID: %w", err)
+		}
+		finding.Category = jsintel.Category(category)
+		finding.Active = active != 0
+		result = append(result, &finding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []*jsintel.StoredFinding{}, nil
+	}
+	return result, nil
 }
 
 func (s *SQLiteStore) FindingExists(structuralID string) (bool, error) {

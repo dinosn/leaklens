@@ -507,7 +507,7 @@ func (m *VectorscanMatcher) matchChunk(content []byte, blobID types.BlobID, opts
 			newMatch := m.buildMatchFromRegexp2(content, blobID, rule, match)
 
 			// Deduplicate
-			if !shouldSuppressMatch(newMatch, content) && !dedup.IsDuplicate(newMatch) {
+			if !shouldSuppressMatch(rule, newMatch, content) && !dedup.IsDuplicate(newMatch) {
 				dedup.Add(newMatch)
 				matches = append(matches, newMatch)
 				stat.Matches++
@@ -630,6 +630,7 @@ func (m *VectorscanMatcher) buildMatchFromRegexp2(
 	start, end := regexp2ByteSpan(string(content), re2match)
 
 	// Extract positional and named capture groups
+	groupNames := m.groupNameCache[rule.Pattern]
 	groups, namedGroups := m.extractGroupsFromMatch(re2match, rule)
 
 	// Extract context
@@ -656,6 +657,7 @@ func (m *VectorscanMatcher) buildMatchFromRegexp2(
 			After:    after,
 		},
 	}
+	populateMatchPolicyMetadata(result, re2match, groupNames)
 	result.StructuralID = result.ComputeStructuralID(rule.StructuralID)
 	result.FindingID = types.ComputeFindingID(rule.StructuralID, groups)
 
@@ -755,7 +757,7 @@ func (m *VectorscanMatcher) matchFallbackRules(content []byte, blobID types.Blob
 			lastEnd = end
 
 			newMatch := m.buildMatchFromRegexp2(content, blobID, rule, match)
-			if !shouldSuppressMatch(newMatch, content) {
+			if !shouldSuppressMatch(rule, newMatch, content) {
 				matches = append(matches, newMatch)
 			}
 

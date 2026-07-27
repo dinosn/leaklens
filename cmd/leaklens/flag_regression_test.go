@@ -14,6 +14,7 @@ import (
 
 	"github.com/dinosn/leaklens/pkg/aianalysis"
 	"github.com/dinosn/leaklens/pkg/enum"
+	"github.com/dinosn/leaklens/pkg/store"
 	"github.com/dinosn/leaklens/pkg/types"
 	"github.com/spf13/cobra"
 )
@@ -669,17 +670,20 @@ func TestRunReportSARIF(t *testing.T) {
 	oldDatastore := reportDatastore
 	oldFormat := reportFormat
 	oldColor := reportColor
+	oldIncludeJSIntel := reportIncludeJSIntel
 	oldQuiet := quiet
 	t.Cleanup(func() {
 		reportDatastore = oldDatastore
 		reportFormat = oldFormat
 		reportColor = oldColor
+		reportIncludeJSIntel = oldIncludeJSIntel
 		quiet = oldQuiet
 	})
 
 	reportDatastore = outputPath
 	reportFormat = "sarif"
 	reportColor = "never"
+	reportIncludeJSIntel = false
 	quiet = false
 
 	var out bytes.Buffer
@@ -696,6 +700,119 @@ func TestRunReportSARIF(t *testing.T) {
 	}
 }
 
+func TestRunReportJSONIncludesPersistedJSIntelWhenRequested(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "out.ds")
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, outputPath)
+	scanJSIntel = true
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	content := []byte(`const endpoint = "https://api.uat.example.test/v1/users";`)
+	if err := runEnumeratorScan(cmd, oneBlobEnumerator{content: content, path: "synthetic-app.js"}); err != nil {
+		t.Fatalf("runEnumeratorScan failed: %v", err)
+	}
+
+	db, err := store.New(store.Config{Path: filepath.Join(outputPath, "datastore.db")})
+	if err != nil {
+		t.Fatalf("opening scan datastore: %v", err)
+	}
+	persisted, err := db.GetJSIntelFindings()
+	db.Close()
+	if err != nil {
+		t.Fatalf("retrieving persisted JS intelligence: %v", err)
+	}
+	if len(persisted) == 0 {
+		t.Fatal("expected persisted JS intelligence")
+	}
+
+	oldDatastore := reportDatastore
+	oldFormat := reportFormat
+	oldColor := reportColor
+	oldIncludeJSIntel := reportIncludeJSIntel
+	oldQuiet := quiet
+	t.Cleanup(func() {
+		reportDatastore = oldDatastore
+		reportFormat = oldFormat
+		reportColor = oldColor
+		reportIncludeJSIntel = oldIncludeJSIntel
+		quiet = oldQuiet
+	})
+	reportDatastore = outputPath
+	reportFormat = "json"
+	reportColor = "never"
+	quiet = false
+
+	reportIncludeJSIntel = false
+	var defaultOut bytes.Buffer
+	defaultReportCmd := &cobra.Command{}
+	defaultReportCmd.SetOut(&defaultOut)
+	if err := runReport(defaultReportCmd, nil); err != nil {
+		t.Fatalf("default runReport failed: %v", err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(defaultOut.String()), "[") || strings.Contains(defaultOut.String(), `"js_intel"`) {
+		t.Fatalf("default JSON report schema changed: %s", defaultOut.String())
+	}
+
+	reportIncludeJSIntel = true
+	var out bytes.Buffer
+	reportCmd := &cobra.Command{}
+	reportCmd.SetOut(&out)
+	if err := runReport(reportCmd, nil); err != nil {
+		t.Fatalf("runReport failed: %v", err)
+	}
+	if !strings.Contains(out.String(), `"environment": "uat"`) {
+		t.Fatalf("expected environment tag in JSON report, got %s", out.String())
+	}
+	if !strings.Contains(out.String(), `"sources": [`) || !strings.Contains(out.String(), "synthetic-app.js") {
+		t.Fatalf("expected source attribution in JSON report, got %s", out.String())
+	}
+}
+
+func TestIncrementalScanBackfillsJSIntelForExistingBlob(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "out.ds")
+	rulePath := writeRegressionRule(t)
+	setScanGlobalsForRegression(t, rulePath, outputPath)
+	content := []byte(`const endpoint = "https://api.stg.example.test/v1/users";`)
+	enumerator := oneBlobEnumerator{content: content, path: "incremental-app.js"}
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := runEnumeratorScan(cmd, enumerator); err != nil {
+		t.Fatalf("initial runEnumeratorScan failed: %v", err)
+	}
+
+	scanIncremental = true
+	scanJSIntel = true
+	if err := runEnumeratorScan(cmd, enumerator); err != nil {
+		t.Fatalf("incremental runEnumeratorScan failed: %v", err)
+	}
+
+	db, err := store.New(store.Config{Path: filepath.Join(outputPath, "datastore.db")})
+	if err != nil {
+		t.Fatalf("opening scan datastore: %v", err)
+	}
+	defer db.Close()
+	findings, err := db.GetJSIntelFindings()
+	if err != nil {
+		t.Fatalf("retrieving JS intelligence: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("expected incremental scan to backfill JS intelligence")
+	}
+	foundEnvironment := false
+	for _, finding := range findings {
+		if finding.Value == "api.stg.example.test" && finding.Environment == "stg" {
+			foundEnvironment = true
+		}
+	}
+	if !foundEnvironment {
+		t.Fatalf("missing stg environment artifact: %#v", findings)
+	}
+}
+
 func TestRunReportRejectsInvalidColor(t *testing.T) {
 	oldFormat := reportFormat
 	oldColor := reportColor
@@ -708,6 +825,24 @@ func TestRunReportRejectsInvalidColor(t *testing.T) {
 	reportColor = "bogus"
 	if err := validateReportOptions(); err == nil || !strings.Contains(err.Error(), "unknown color mode") {
 		t.Fatalf("expected invalid color error, got %v", err)
+	}
+}
+
+func TestRunReportRejectsJSIntelSARIFCombination(t *testing.T) {
+	oldFormat := reportFormat
+	oldColor := reportColor
+	oldIncludeJSIntel := reportIncludeJSIntel
+	t.Cleanup(func() {
+		reportFormat = oldFormat
+		reportColor = oldColor
+		reportIncludeJSIntel = oldIncludeJSIntel
+	})
+
+	reportFormat = "sarif"
+	reportColor = "never"
+	reportIncludeJSIntel = true
+	if err := validateReportOptions(); err == nil || !strings.Contains(err.Error(), "not supported with SARIF") {
+		t.Fatalf("expected JS-intel SARIF compatibility error, got %v", err)
 	}
 }
 

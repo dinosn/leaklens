@@ -26,6 +26,12 @@ func TestLoadRule_Valid(t *testing.T) {
     categories:
       - secret
       - api
+    min_entropy: 3.5
+    pattern_requirements:
+      min_digits: 2
+      min_uppercase: 1
+      ignore_if_contains:
+        - EXAMPLE
 `
 
 	rule, err := loader.LoadRule([]byte(validYAML))
@@ -56,6 +62,21 @@ func TestLoadRule_Valid(t *testing.T) {
 	}
 	if len(rule.Categories) != 2 {
 		t.Errorf("expected 2 categories, got %d", len(rule.Categories))
+	}
+	if rule.MinEntropy != 3.5 {
+		t.Errorf("expected min entropy 3.5, got %v", rule.MinEntropy)
+	}
+	if rule.PatternRequirements == nil {
+		t.Fatal("expected pattern requirements")
+	}
+	if rule.PatternRequirements.MinDigits == nil || *rule.PatternRequirements.MinDigits != 2 {
+		t.Errorf("expected min_digits 2, got %#v", rule.PatternRequirements.MinDigits)
+	}
+	if rule.PatternRequirements.MinUppercase == nil || *rule.PatternRequirements.MinUppercase != 1 {
+		t.Errorf("expected min_uppercase 1, got %#v", rule.PatternRequirements.MinUppercase)
+	}
+	if len(rule.PatternRequirements.IgnoreIfContains) != 1 || rule.PatternRequirements.IgnoreIfContains[0] != "EXAMPLE" {
+		t.Errorf("unexpected ignore_if_contains: %#v", rule.PatternRequirements.IgnoreIfContains)
 	}
 	if rule.StructuralID == "" {
 		t.Error("expected StructuralID to be computed")
@@ -313,6 +334,7 @@ func TestConvertYAMLRule(t *testing.T) {
 		Description: "Test description",
 		Examples:    []string{"test example"},
 		Categories:  []string{"test"},
+		MinEntropy:  3.1,
 	}
 
 	rule := convertYAMLRule(yr)
@@ -328,6 +350,9 @@ func TestConvertYAMLRule(t *testing.T) {
 	}
 	if rule.StructuralID == "" {
 		t.Error("expected StructuralID to be computed")
+	}
+	if rule.MinEntropy != yr.MinEntropy {
+		t.Errorf("expected MinEntropy %v, got %v", yr.MinEntropy, rule.MinEntropy)
 	}
 
 	// Verify StructuralID is correct

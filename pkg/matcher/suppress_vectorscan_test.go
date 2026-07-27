@@ -3,8 +3,10 @@
 package matcher
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/dinosn/leaklens/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,4 +44,30 @@ func TestVectorscanLinkedInAccessTokenContextSuppression(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
 	assert.Equal(t, token, string(matches[0].NamedGroups["access_token"]))
+}
+
+func TestVectorscanDataDrivenRulePolicies(t *testing.T) {
+	rules := loadMatcherRulesByID(t, "np.azure.5", "kingfisher.zuplo.1")
+	azureRule := matcherRuleByID(t, rules, "np.azure.5")
+	zuploRule := matcherRuleByID(t, rules, "kingfisher.zuplo.1")
+	m, err := NewVectorscan(rules, 0)
+	require.NoError(t, err)
+	defer m.Close()
+
+	content := []byte(strings.Join([]string{
+		matcherExampleContaining(t, azureRule.NegativeExamples, "00000000"),
+		azureRule.Examples[0],
+		zuploRule.Examples[0],
+		matcherExampleWithChangedLastByte(t, zuploRule.Examples[0]),
+	}, "\n"))
+	matches, err := m.Match(content)
+	require.NoError(t, err)
+	require.Len(t, matches, 2)
+
+	byRule := make(map[string]*types.Match, len(matches))
+	for _, match := range matches {
+		byRule[match.RuleID] = match
+	}
+	require.Contains(t, byRule, "np.azure.5")
+	require.Contains(t, byRule, "kingfisher.zuplo.1")
 }

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
+	"github.com/dinosn/leaklens/pkg/jsintel"
 	"github.com/dinosn/leaklens/pkg/rule"
 	"github.com/dinosn/leaklens/pkg/store"
 	"github.com/dinosn/leaklens/pkg/types"
@@ -15,9 +17,10 @@ import (
 )
 
 var (
-	reportDatastore string
-	reportFormat    string
-	reportColor     string
+	reportDatastore      string
+	reportFormat         string
+	reportColor          string
+	reportIncludeJSIntel bool
 )
 
 // styles holds color formatters matching NoseyParker color scheme
@@ -75,6 +78,7 @@ func init() {
 	reportCmd.Flags().StringVar(&reportDatastore, "datastore", "leaklens.ds", "Path to datastore directory or file")
 	reportCmd.Flags().StringVar(&reportFormat, "format", "human", "Output format: human, json, sarif")
 	reportCmd.Flags().StringVar(&reportColor, "color", "auto", "Color output: auto, always, never")
+	reportCmd.Flags().BoolVar(&reportIncludeJSIntel, "include-js-intel", false, "Include persisted JS-intelligence artifacts (human and JSON formats)")
 }
 
 func runReport(cmd *cobra.Command, args []string) error {
@@ -132,6 +136,14 @@ func runReport(cmd *cobra.Command, args []string) error {
 		ruleMap[r.ID] = r
 	}
 
+	var jsIntelFindings []*jsintel.StoredFinding
+	if reportIncludeJSIntel {
+		jsIntelFindings, err = s.GetJSIntelFindings()
+		if err != nil {
+			return fmt.Errorf("retrieving JS-intelligence findings: %w", err)
+		}
+	}
+
 	if quiet {
 		return nil
 	}
@@ -139,9 +151,18 @@ func runReport(cmd *cobra.Command, args []string) error {
 	// Output based on format
 	switch reportFormat {
 	case "json":
+		if reportIncludeJSIntel {
+			return outputReportJSONWithJSIntel(cmd, s, findings, matches, ruleMap, jsIntelFindings)
+		}
 		return outputReportJSON(cmd, findings, matches, ruleMap)
 	case "human":
-		return outputReportHuman(cmd, findings, matches, storePath, ruleMap)
+		if err := outputReportHuman(cmd, findings, matches, storePath, ruleMap); err != nil {
+			return err
+		}
+		if reportIncludeJSIntel {
+			return outputJSIntelHuman(cmd, s, jsIntelFindings)
+		}
+		return nil
 	case "sarif":
 		return outputSARIF(cmd, s, rules, matches)
 	default:
@@ -159,6 +180,9 @@ func validateReportOptions() error {
 	case "auto", "always", "never":
 	default:
 		return fmt.Errorf("unknown color mode: %s", reportColor)
+	}
+	if reportIncludeJSIntel && reportFormat == "sarif" {
+		return fmt.Errorf("--include-js-intel is not supported with SARIF output")
 	}
 	return nil
 }
@@ -348,6 +372,117 @@ func outputReportJSON(cmd *cobra.Command, findings []*types.Finding, matches []*
 	encoder := json.NewEncoder(cmd.OutOrStdout())
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(findings)
+}
+
+type jsIntelReportFinding struct {
+	ID          string           `json:"id"`
+	BlobID      types.BlobID     `json:"blob_id"`
+	Category    jsintel.Category `json:"category"`
+	Value       string           `json:"value"`
+	Detail      string           `json:"detail,omitempty"`
+	Method      string           `json:"method,omitempty"`
+	Confidence  string           `json:"confidence"`
+	Environment string           `json:"environment,omitempty"`
+	Line        int              `json:"line,omitempty"`
+	Column      int              `json:"column,omitempty"`
+	Active      bool             `json:"active,omitempty"`
+	Sources     []string         `json:"sources,omitempty"`
+}
+
+type combinedReportJSON struct {
+	Findings []*types.Finding       `json:"findings"`
+	JSIntel  []jsIntelReportFinding `json:"js_intel"`
+}
+
+func outputReportJSONWithJSIntel(
+	cmd *cobra.Command,
+	s store.Store,
+	findings []*types.Finding,
+	matches []*types.Match,
+	ruleMap map[string]*types.Rule,
+	jsFindings []*jsintel.StoredFinding,
+) error {
+	matchesByFinding := buildFindingMatchMap(findings, matches, ruleMap)
+	for _, finding := range findings {
+		finding.Matches = matchesByFinding[finding.ID]
+	}
+	items, err := buildJSIntelReportFindings(s, jsFindings)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(cmd.OutOrStdout())
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(combinedReportJSON{Findings: findings, JSIntel: items})
+}
+
+func buildJSIntelReportFindings(s store.Store, findings []*jsintel.StoredFinding) ([]jsIntelReportFinding, error) {
+	items := make([]jsIntelReportFinding, 0, len(findings))
+	for _, finding := range findings {
+		provenance, err := s.GetAllProvenance(finding.BlobID)
+		if err != nil {
+			return nil, fmt.Errorf("retrieving JS-intelligence provenance: %w", err)
+		}
+		sourceSet := make(map[string]struct{})
+		for _, source := range provenance {
+			if path := source.Path(); path != "" {
+				sourceSet[path] = struct{}{}
+			}
+		}
+		sources := make([]string, 0, len(sourceSet))
+		for source := range sourceSet {
+			sources = append(sources, source)
+		}
+		sort.Strings(sources)
+		items = append(items, jsIntelReportFinding{
+			ID:          finding.ID,
+			BlobID:      finding.BlobID,
+			Category:    finding.Category,
+			Value:       jsintel.DisplayValue(finding.Finding),
+			Detail:      finding.Detail,
+			Method:      finding.Method,
+			Confidence:  finding.Confidence,
+			Environment: finding.Environment,
+			Line:        finding.Line,
+			Column:      finding.Column,
+			Active:      finding.Active,
+			Sources:     sources,
+		})
+	}
+	return items, nil
+}
+
+func outputJSIntelHuman(cmd *cobra.Command, s store.Store, findings []*jsintel.StoredFinding) error {
+	if len(findings) == 0 {
+		return nil
+	}
+	items, err := buildJSIntelReportFindings(s, findings)
+	if err != nil {
+		return err
+	}
+	sty := newStyles(!color.NoColor)
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "JS intelligence (%d artifacts)\n\n", len(items))
+	for i, item := range items {
+		fmt.Fprintf(out, "%s (%s %s)\n",
+			sty.findingHeading.Sprintf("Artifact %d/%d", i+1, len(items)),
+			sty.heading.Sprint("id"), sty.id.Sprint(item.ID))
+		fmt.Fprintf(out, "%s %s\n", sty.heading.Sprint("Category:"), sty.ruleName.Sprint(item.Category))
+		if item.Environment != "" {
+			fmt.Fprintf(out, "%s %s\n", sty.heading.Sprint("Environment:"), sty.metadata.Sprint(item.Environment))
+		}
+		fmt.Fprintf(out, "%s %s\n", sty.heading.Sprint("Value:"), sty.match.Sprint(item.Value))
+		for _, source := range item.Sources {
+			fmt.Fprintf(out, "%s %s\n", sty.heading.Sprint("Source:"), sty.metadata.Sprint(source))
+		}
+		if item.Line > 0 {
+			fmt.Fprintf(out, "%s %d:%d\n", sty.heading.Sprint("Location:"), item.Line, item.Column)
+		}
+		if item.Detail != "" || item.Method != "" {
+			fmt.Fprintf(out, "%s %s %s\n", sty.heading.Sprint("Detail:"), item.Method, item.Detail)
+		}
+		fmt.Fprintln(out)
+	}
+	return nil
 }
 
 func outputReportHuman(cmd *cobra.Command, findings []*types.Finding, matches []*types.Match, datastorePath string, ruleMap map[string]*types.Rule) error {

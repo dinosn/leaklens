@@ -222,9 +222,11 @@ func init() {
 
 // blobJob represents a unit of work for the worker pool.
 type blobJob struct {
-	content []byte
-	blobID  types.BlobID
-	prov    types.Provenance
+	content            []byte
+	blobID             types.BlobID
+	prov               types.Provenance
+	jsFindings         []jsintel.Finding
+	skipSecretMatching bool
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -786,7 +788,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	// Producer: enumerate blobs and send to workers (NO DB writes)
 	g.Go(func() error {
 		defer close(jobs)
-		enqueue := func(content []byte, blobID types.BlobID, prov types.Provenance) error {
+		enqueue := func(content []byte, blobID types.BlobID, prov types.Provenance, jsFindings []jsintel.Finding) error {
 			totalBytes.Add(int64(len(content)))
 			blobCount.Add(1)
 			if scanAI && aianalysis.ShouldIncludePath(prov.Path()) {
@@ -810,12 +812,26 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 				}
 				if exists {
 					skippedCount.Add(1)
-					return nil
+					if len(jsFindings) == 0 {
+						return nil
+					}
+					select {
+					case jobs <- blobJob{
+						content:            content,
+						blobID:             blobID,
+						prov:               prov,
+						jsFindings:         jsFindings,
+						skipSecretMatching: true,
+					}:
+						return nil
+					case <-workerCtx.Done():
+						return workerCtx.Err()
+					}
 				}
 			}
 
 			select {
-			case jobs <- blobJob{content: content, blobID: blobID, prov: prov}:
+			case jobs <- blobJob{content: content, blobID: blobID, prov: prov, jsFindings: jsFindings}:
 				return nil
 			case <-workerCtx.Done():
 				return workerCtx.Err()
@@ -823,7 +839,25 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 		}
 
 		return enumerator.Enumerate(workerCtx, func(content []byte, blobID types.BlobID, prov types.Provenance) error {
-			if err := enqueue(content, blobID, prov); err != nil {
+			var jsResult jsintel.Result
+			if jsAnalyzer != nil {
+				jsResult = jsAnalyzer.Analyze(content, prov.Path())
+				if len(jsResult.Findings) > 0 {
+					jsIntelArtifactCount.Add(int64(len(jsResult.Findings)))
+					if inlineHuman {
+						outputMu.Lock()
+						printJSIntelFindings(cmd, sty, prov, jsResult.Findings)
+						outputMu.Unlock()
+					}
+				}
+				for _, warning := range jsResult.Warnings {
+					if !quiet {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: JS intelligence: %s\n", warning)
+					}
+				}
+			}
+
+			if err := enqueue(content, blobID, prov, jsResult.Findings); err != nil {
 				return err
 			}
 
@@ -842,31 +876,13 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 						continue
 					}
 					derivedProv := sourceMapProvenance(prov.Path(), source.Path)
-					if err := enqueue(source.Content, types.ComputeBlobID(source.Content), derivedProv); err != nil {
+					if err := enqueue(source.Content, types.ComputeBlobID(source.Content), derivedProv, nil); err != nil {
 						return err
 					}
 				}
 			}
 
-			if jsAnalyzer == nil {
-				return nil
-			}
-
-			result := jsAnalyzer.Analyze(content, prov.Path())
-			if len(result.Findings) > 0 {
-				jsIntelArtifactCount.Add(int64(len(result.Findings)))
-				if inlineHuman {
-					outputMu.Lock()
-					printJSIntelFindings(cmd, sty, prov, result.Findings)
-					outputMu.Unlock()
-				}
-			}
-			for _, warning := range result.Warnings {
-				if !quiet {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: JS intelligence: %s\n", warning)
-				}
-			}
-			for _, source := range result.Sources {
+			for _, source := range jsResult.Sources {
 				if int64(len(source.Content)) > scanMaxFileSize {
 					if !quiet {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: source-map source too large, skipping: %s\n", source.Path)
@@ -874,7 +890,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 					continue
 				}
 				derivedProv := sourceMapProvenance(prov.Path(), source.Path)
-				if err := enqueue(source.Content, types.ComputeBlobID(source.Content), derivedProv); err != nil {
+				if err := enqueue(source.Content, types.ComputeBlobID(source.Content), derivedProv, nil); err != nil {
 					return err
 				}
 			}
@@ -887,11 +903,12 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 	for i := 0; i < numWorkers; i++ {
 		g.Go(func() error {
 			type batchItem struct {
-				blobID  types.BlobID
-				prov    types.Provenance
-				content []byte
-				size    int64
-				matches []*types.Match
+				blobID     types.BlobID
+				prov       types.Provenance
+				content    []byte
+				size       int64
+				matches    []*types.Match
+				jsFindings []jsintel.Finding
 			}
 			var batch []batchItem
 
@@ -915,6 +932,11 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 						}
 						if err := tx.AddProvenance(item.blobID, item.prov); err != nil {
 							return fmt.Errorf("storing provenance: %w", err)
+						}
+						for _, finding := range item.jsFindings {
+							if err := tx.AddJSIntelFinding(jsintel.NewStoredFinding(item.blobID, finding)); err != nil {
+								return fmt.Errorf("storing JS-intelligence finding: %w", err)
+							}
 						}
 						for _, match := range item.matches {
 							if err := tx.AddMatch(match); err != nil {
@@ -948,7 +970,7 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 			}
 
 			for job := range jobs {
-				if mirror != nil {
+				if mirror != nil && !job.skipSecretMatching {
 					wrote, err := mirror.Save(job.content, job.blobID, job.prov)
 					if err != nil {
 						return fmt.Errorf("saving downloaded file: %w", err)
@@ -958,39 +980,44 @@ func runEnumeratorScan(cmd *cobra.Command, enumerator enum.Enumerator) error {
 					}
 				}
 
-				matches, err := m.MatchWithBlobID(job.content, job.blobID)
-				if err != nil {
+				var matches []*types.Match
+				var matchErr error
+				if !job.skipSecretMatching {
+					matches, matchErr = m.MatchWithBlobID(job.content, job.blobID)
+				}
+				if matchErr != nil {
 					if !quiet {
-						fmt.Fprintf(os.Stderr, "[warn] match error (skipping blob %s): %v\n", job.blobID.Hex(), err)
+						fmt.Fprintf(os.Stderr, "[warn] secret match error for blob %s (storing other artifacts): %v\n", job.blobID.Hex(), matchErr)
 					}
-					continue
-				}
+					matches = nil
+				} else {
+					for _, match := range matches {
+						startLine, startCol := types.ComputeLineColumn(job.content, int(match.Location.Offset.Start))
+						endLine, endCol := types.ComputeLineColumn(job.content, int(match.Location.Offset.End))
+						match.Location.Source.Start.Line = startLine
+						match.Location.Source.Start.Column = startCol
+						match.Location.Source.End.Line = endLine
+						match.Location.Source.End.Column = endCol
+					}
 
-				for _, match := range matches {
-					startLine, startCol := types.ComputeLineColumn(job.content, int(match.Location.Offset.Start))
-					endLine, endCol := types.ComputeLineColumn(job.content, int(match.Location.Offset.End))
-					match.Location.Source.Start.Line = startLine
-					match.Location.Source.Start.Column = startCol
-					match.Location.Source.End.Line = endLine
-					match.Location.Source.End.Column = endCol
-				}
+					validateMatches(workerCtx, validationEngine, matches, verbose)
+					matchCount.Add(int64(len(matches)))
 
-				validateMatches(workerCtx, validationEngine, matches, verbose)
-				matchCount.Add(int64(len(matches)))
-
-				// Inline per-file reporting for human format
-				if inlineHuman && len(matches) > 0 {
-					outputMu.Lock()
-					printFileMatches(cmd, sty, job.prov, matches, ruleMap)
-					outputMu.Unlock()
+					// Inline per-file reporting for human format
+					if inlineHuman && len(matches) > 0 {
+						outputMu.Lock()
+						printFileMatches(cmd, sty, job.prov, matches, ruleMap)
+						outputMu.Unlock()
+					}
 				}
 
 				batch = append(batch, batchItem{
-					blobID:  job.blobID,
-					prov:    job.prov,
-					content: job.content,
-					size:    int64(len(job.content)),
-					matches: matches,
+					blobID:     job.blobID,
+					prov:       job.prov,
+					content:    job.content,
+					size:       int64(len(job.content)),
+					matches:    matches,
+					jsFindings: job.jsFindings,
 				})
 				if len(batch) >= batchSize {
 					if err := flush(); err != nil {

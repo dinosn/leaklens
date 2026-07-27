@@ -1,6 +1,7 @@
 package store
 
 import (
+	"github.com/dinosn/leaklens/pkg/jsintel"
 	"github.com/dinosn/leaklens/pkg/types"
 )
 
@@ -34,6 +35,13 @@ type Store interface {
 
 	// GetFindings retrieves all findings (for reporting).
 	GetFindings() ([]*types.Finding, error)
+
+	// AddJSIntelFinding stores a JS-intelligence artifact independently of
+	// rule-based secret findings.
+	AddJSIntelFinding(f *jsintel.StoredFinding) error
+
+	// GetJSIntelFindings retrieves persisted JS-intelligence artifacts.
+	GetJSIntelFindings() ([]*jsintel.StoredFinding, error)
 
 	// FindingExists checks if a finding with this structural ID exists.
 	FindingExists(structuralID string) (bool, error)

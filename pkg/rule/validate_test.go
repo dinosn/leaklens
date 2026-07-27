@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -89,6 +90,38 @@ func TestValidateRule_InvalidPattern(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "pattern") {
 		t.Errorf("expected 'pattern' in error message, got: %v", err)
+	}
+}
+
+func TestValidateRule_InvalidMatchPolicy(t *testing.T) {
+	negative := -1
+	testCases := []struct {
+		name    string
+		entropy float64
+		reqs    *types.PatternRequirements
+	}{
+		{name: "negative entropy", entropy: -1},
+		{name: "NaN entropy", entropy: math.NaN()},
+		{name: "infinite entropy", entropy: math.Inf(1)},
+		{name: "negative character minimum", reqs: &types.PatternRequirements{MinDigits: &negative}},
+		{name: "missing checksum template", reqs: &types.PatternRequirements{
+			Checksum: &types.ChecksumRequirement{Expected: "{{ BODY | crc32_hex }}"},
+		}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := &types.Rule{
+				ID:                  "np.test.1",
+				Name:                "Test Rule",
+				Pattern:             "test.*pattern",
+				MinEntropy:          tc.entropy,
+				PatternRequirements: tc.reqs,
+			}
+			if err := ValidateRule(rule); err == nil {
+				t.Fatal("expected invalid match policy to be rejected")
+			}
+		})
 	}
 }
 

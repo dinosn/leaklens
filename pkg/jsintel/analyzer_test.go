@@ -40,6 +40,45 @@ const pkg = "/node_modules/@internal/widget/dist/index.js";
 	}
 }
 
+func TestSubdomainEnvironmentClassificationUsesLabelBoundaries(t *testing.T) {
+	content := []byte(strings.Join([]string{
+		"api.uat.example.test",
+		"stg-api.example.test",
+		"pre-prod.example.test",
+		"sandbox.example.test",
+		"contest.example.test",
+		"devops.example.test",
+		"latest.example.test",
+		"preview.example.test",
+	}, "\n"))
+
+	result := New(DefaultConfig()).Analyze(content, "app.js")
+	want := map[string]string{
+		"api.uat.example.test":  "uat",
+		"stg-api.example.test":  "stg",
+		"pre-prod.example.test": "pre",
+		"sandbox.example.test":  "sandbox",
+	}
+	for _, finding := range result.Findings {
+		if finding.Category != CategorySubdomain {
+			continue
+		}
+		if environment, ok := want[finding.Value]; ok {
+			if finding.Environment != environment {
+				t.Errorf("environment for %s: got %q want %q", finding.Value, finding.Environment, environment)
+			}
+			delete(want, finding.Value)
+			continue
+		}
+		if finding.Environment != "" {
+			t.Errorf("unexpected environment %q for %s", finding.Environment, finding.Value)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing classified domains: %#v", want)
+	}
+}
+
 func TestAnalyzeExtractsInlineSourceMapSources(t *testing.T) {
 	sm := map[string]any{
 		"version":        3,

@@ -6,10 +6,42 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dinosn/leaklens/pkg/jsintel"
 	"github.com/dinosn/leaklens/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSQLiteJSIntelFindingRoundTripAndSchemaExtension(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := NewSQLite(dbPath)
+	require.NoError(t, err)
+	defer store.Close()
+
+	blobID := types.ComputeBlobID([]byte("api.uat.example.test"))
+	require.NoError(t, store.AddBlob(blobID, 20))
+	record := jsintel.NewStoredFinding(blobID, jsintel.Finding{
+		Category:    jsintel.CategorySubdomain,
+		Value:       "api.uat.example.test",
+		Detail:      "synthetic fixture",
+		Method:      "regex",
+		Confidence:  "info",
+		Environment: "uat",
+		Line:        2,
+		Column:      4,
+		Active:      true,
+	})
+	require.NoError(t, store.AddJSIntelFinding(record))
+
+	findings, err := store.GetJSIntelFindings()
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	require.Equal(t, record, findings[0])
+
+	var schemaVersion int
+	require.NoError(t, store.e.QueryRow("SELECT version FROM schema_version").Scan(&schemaVersion))
+	require.Equal(t, SchemaVersion, schemaVersion)
+}
 
 func TestSQLite_SchemaWithLocationColumns(t *testing.T) {
 	// Arrange

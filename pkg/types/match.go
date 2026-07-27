@@ -8,16 +8,19 @@ import (
 
 // Match is a single detection result.
 type Match struct {
-	BlobID           BlobID
-	StructuralID     string // SHA-1(rule_structural_id + '\0' + blob_id + '\0' + start + '\0' + end)
-	FindingID        string // SHA-1(rule_structural_id + '\0' + json(groups)) — content-based dedup ID
-	RuleID           string // e.g., "np.aws.1"
-	RuleName         string // e.g., "AWS API Key"
-	Location         Location
-	Groups           [][]byte          // regex capture groups (positional, deprecated - use NamedGroups)
-	NamedGroups      map[string][]byte // named capture groups from regex (?P<name>...)
-	Snippet          Snippet
-	ValidationResult *ValidationResult `json:"validation_result,omitempty"`
+	BlobID            BlobID
+	StructuralID      string // SHA-1(rule_structural_id + '\0' + blob_id + '\0' + start + '\0' + end)
+	FindingID         string // SHA-1(rule_structural_id + '\0' + json(groups)) — content-based dedup ID
+	RuleID            string // e.g., "np.aws.1"
+	RuleName          string // e.g., "AWS API Key"
+	Location          Location
+	Groups            [][]byte          // regex capture groups (positional, deprecated - use NamedGroups)
+	NamedGroups       map[string][]byte // named capture groups from regex (?P<name>...)
+	SecretValue       []byte            `json:"-"` // canonical candidate selected for match-quality filters
+	CaptureGroupCount int               `json:"-"` // number of explicit groups in the compiled pattern
+	HasNamedGroups    bool              `json:"-"` // whether the compiled pattern declares named groups
+	Snippet           Snippet
+	ValidationResult  *ValidationResult `json:"validation_result,omitempty"`
 }
 
 // ComputeStructuralID computes content-based unique ID.

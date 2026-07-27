@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 type Category string
@@ -62,14 +64,32 @@ type Result struct {
 }
 
 type Finding struct {
-	Category   Category `json:"category"`
-	Value      string   `json:"value"`
-	Detail     string   `json:"detail,omitempty"`
-	Method     string   `json:"method,omitempty"`
-	Confidence string   `json:"confidence"`
-	Line       int      `json:"line,omitempty"`
-	Column     int      `json:"column,omitempty"`
-	Active     bool     `json:"active,omitempty"`
+	Category    Category `json:"category"`
+	Value       string   `json:"value"`
+	Detail      string   `json:"detail,omitempty"`
+	Method      string   `json:"method,omitempty"`
+	Confidence  string   `json:"confidence"`
+	Environment string   `json:"environment,omitempty"`
+	Line        int      `json:"line,omitempty"`
+	Column      int      `json:"column,omitempty"`
+	Active      bool     `json:"active,omitempty"`
+}
+
+var environmentAliases = map[string]string{
+	"dev":         "dev",
+	"development": "dev",
+	"test":        "test",
+	"testing":     "test",
+	"qa":          "qa",
+	"sit":         "sit",
+	"stg":         "stg",
+	"stage":       "stg",
+	"staging":     "stg",
+	"uat":         "uat",
+	"pre":         "pre",
+	"preprod":     "pre",
+	"nonprod":     "nonprod",
+	"sandbox":     "sandbox",
 }
 
 type SourceFile struct {
@@ -285,14 +305,32 @@ func extractSubdomains(text string) []Finding {
 		}
 		line, col := lineColumn(text, match[0])
 		findings = append(findings, Finding{
-			Category:   CategorySubdomain,
-			Value:      value,
-			Confidence: "info",
-			Line:       line,
-			Column:     col,
+			Category:    CategorySubdomain,
+			Value:       value,
+			Confidence:  "info",
+			Environment: classifyEnvironment(value),
+			Line:        line,
+			Column:      col,
 		})
 	}
 	return findings
+}
+
+func classifyEnvironment(hostname string) string {
+	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+	registrable, err := publicsuffix.EffectiveTLDPlusOne(hostname)
+	if err != nil || registrable == hostname {
+		return ""
+	}
+	prefix := strings.TrimSuffix(hostname, "."+registrable)
+	for _, label := range strings.Split(prefix, ".") {
+		for _, segment := range strings.Split(label, "-") {
+			if environment, ok := environmentAliases[segment]; ok {
+				return environment
+			}
+		}
+	}
+	return ""
 }
 
 func isNoisyDomain(value string) bool {

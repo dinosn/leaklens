@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/dinosn/leaklens/pkg/jsintel"
 	"github.com/dinosn/leaklens/pkg/types"
 )
 
@@ -17,21 +18,48 @@ type blobRecord struct {
 // No CGO dependency required.
 // Originally used only for WASM builds, but now the default for non-CGO builds.
 type MemoryStore struct {
-	mu         sync.RWMutex
-	blobs      map[string]blobRecord         // keyed by BlobID.Hex()
-	matches    []*types.Match                // all matches
-	findings   map[string]*types.Finding     // keyed by structural_id
-	provenance map[string][]types.Provenance // keyed by BlobID.Hex()
+	mu              sync.RWMutex
+	blobs           map[string]blobRecord             // keyed by BlobID.Hex()
+	matches         []*types.Match                    // all matches
+	findings        map[string]*types.Finding         // keyed by structural_id
+	jsIntelFindings map[string]*jsintel.StoredFinding // keyed by stable JS-intel ID
+	provenance      map[string][]types.Provenance     // keyed by BlobID.Hex()
 }
 
 // NewMemory creates a new in-memory store.
 func NewMemory() *MemoryStore {
 	return &MemoryStore{
-		blobs:      make(map[string]blobRecord),
-		matches:    make([]*types.Match, 0),
-		findings:   make(map[string]*types.Finding),
-		provenance: make(map[string][]types.Provenance),
+		blobs:           make(map[string]blobRecord),
+		matches:         make([]*types.Match, 0),
+		findings:        make(map[string]*types.Finding),
+		jsIntelFindings: make(map[string]*jsintel.StoredFinding),
+		provenance:      make(map[string][]types.Provenance),
 	}
+}
+
+// AddJSIntelFinding stores a JS-intelligence artifact (deduplicated by ID).
+func (m *MemoryStore) AddJSIntelFinding(f *jsintel.StoredFinding) error {
+	if f == nil {
+		return fmt.Errorf("JS-intelligence finding is nil")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copy := *f
+	m.jsIntelFindings[f.ID] = &copy
+	return nil
+}
+
+// GetJSIntelFindings retrieves all JS-intelligence artifacts deterministically.
+func (m *MemoryStore) GetJSIntelFindings() ([]*jsintel.StoredFinding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]*jsintel.StoredFinding, 0, len(m.jsIntelFindings))
+	for _, finding := range m.jsIntelFindings {
+		copy := *finding
+		result = append(result, &copy)
+	}
+	jsintel.SortStoredFindings(result)
+	return result, nil
 }
 
 // AddBlob stores a blob record.

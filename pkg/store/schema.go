@@ -41,6 +41,10 @@ func CreateSchema(db *sql.DB) error {
 		return fmt.Errorf("creating annotations table: %w", err)
 	}
 
+	if err := createJSIntelFindingsTable(db); err != nil {
+		return fmt.Errorf("creating LeakLens JS-intelligence table: %w", err)
+	}
+
 	return nil
 }
 
@@ -164,6 +168,33 @@ func createAnnotationsTable(db *sql.DB) error {
 			updated_at TEXT NOT NULL,
 			UNIQUE(target_type, target_id)
 		)
+	`)
+	return err
+}
+
+// createJSIntelFindingsTable adds a LeakLens-owned extension without changing
+// the NoseyParker-compatible core tables or schema version.
+func createJSIntelFindingsTable(db *sql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS leaklens_js_intel_findings (
+			id TEXT PRIMARY KEY NOT NULL,
+			blob_id TEXT NOT NULL REFERENCES blobs(id),
+			category TEXT NOT NULL,
+			value TEXT NOT NULL,
+			detail TEXT,
+			method TEXT,
+			confidence TEXT NOT NULL,
+			environment TEXT,
+			line INTEGER,
+			column INTEGER,
+			active INTEGER NOT NULL DEFAULT 0
+		)
+	`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_leaklens_js_intel_blob_id
+		ON leaklens_js_intel_findings(blob_id)
 	`)
 	return err
 }

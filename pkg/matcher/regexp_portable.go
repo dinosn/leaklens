@@ -131,14 +131,16 @@ func (m *PortableRegexpMatcher) matchSequential(content []byte, blobID types.Blo
 			start, end := regexp2ByteSpan(contentStr, match)
 
 			// Extract capture groups
+			groupNames := m.groupNameCache[rule.Pattern]
 			groups := extractCaptureGroups(match)
-			namedGroups := extractNamedGroups(match, m.groupNameCache[rule.Pattern])
+			namedGroups := extractNamedGroups(match, groupNames)
 
 			// Build match result
 			result := buildMatchResult(blobID, rule, start, end, groups, namedGroups, content, m.contextLines)
+			populateMatchPolicyMetadata(result, match, groupNames)
 
 			// Deduplicate
-			if !shouldSuppressMatch(result, content) && !m.dedup.IsDuplicate(result) {
+			if !shouldSuppressMatch(rule, result, content) && !m.dedup.IsDuplicate(result) {
 				m.dedup.Add(result)
 				matches = append(matches, result)
 			}
@@ -223,10 +225,12 @@ func (m *PortableRegexpMatcher) matchParallel(content []byte, blobID types.BlobI
 					start, end := regexp2ByteSpan(contentStr, match)
 
 					// Extract capture groups and build result
+					groupNames := m.groupNameCache[rule.Pattern]
 					groups := extractCaptureGroups(match)
-					namedGroups := extractNamedGroups(match, m.groupNameCache[rule.Pattern])
+					namedGroups := extractNamedGroups(match, groupNames)
 					matchResult := buildMatchResult(blobID, rule, start, end, groups, namedGroups, content, m.contextLines)
-					if !shouldSuppressMatch(matchResult, content) {
+					populateMatchPolicyMetadata(matchResult, match, groupNames)
+					if !shouldSuppressMatch(rule, matchResult, content) {
 						workerMatches = append(workerMatches, matchResult)
 					}
 

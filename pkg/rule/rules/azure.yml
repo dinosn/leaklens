@@ -183,7 +183,7 @@ rules:
   id: np.azure.5
 
   # Hyperscan-compatible pattern (no lookbehind/lookahead)
-  # Comment filtering and all-zeros/all-f rejection moved to ignore_if_contains
+  # All-zeros/all-f rejection is handled by ignore_if_contains.
   pattern: |
     (?ix)
     (?:["']?Ocp-Apim-Subscription-Key["']?|subscription[-_]key)  (?# Header name with optional quotes )
@@ -196,8 +196,6 @@ rules:
     ignore_if_contains:
       - "00000000000000000000000000000000"
       - "ffffffffffffffffffffffffffffffff"
-      - "// "
-      - "# "
 
   references:
   - https://learn.microsoft.com/en-us/azure/api-management/api-management-subscriptions

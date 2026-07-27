@@ -182,12 +182,193 @@ func TestShouldSuppressOpaqueSecretUsesNamedCapture(t *testing.T) {
 				RuleID:      ruleID,
 				NamedGroups: map[string][]byte{"token": []byte("example123456")},
 			}
-			assert.True(t, shouldSuppressMatch(match, nil))
+			assert.True(t, shouldSuppressMatch(&types.Rule{ID: ruleID}, match, nil))
 
 			match.NamedGroups["token"] = []byte("4f9A2b7C8d1E6g")
-			assert.False(t, shouldSuppressMatch(match, nil))
+			assert.False(t, shouldSuppressMatch(&types.Rule{ID: ruleID}, match, nil))
 		})
 	}
+}
+
+func TestDataDrivenRulePolicies(t *testing.T) {
+	minDigits := 2
+	minUppercase := 1
+	minSpecial := 2
+	customSpecial := ":-"
+
+	testCases := []struct {
+		name  string
+		rule  *types.Rule
+		match *types.Match
+		want  bool
+	}{
+		{
+			name: "entropy rejects low-complexity candidate",
+			rule: &types.Rule{MinEntropy: 3.0},
+			match: &types.Match{
+				SecretValue: []byte("fooProd"),
+				Groups:      [][]byte{[]byte("fooProd")},
+			},
+			want: true,
+		},
+		{
+			name: "camel-case literal is not a global placeholder",
+			rule: &types.Rule{},
+			match: &types.Match{
+				SecretValue: []byte("fooProd"),
+				Groups:      [][]byte{[]byte("fooProd")},
+			},
+			want: false,
+		},
+		{
+			name: "exact environment template is suppressed",
+			rule: &types.Rule{},
+			match: &types.Match{
+				SecretValue: []byte("${CLIENT_SECRET}"),
+				Groups:      [][]byte{[]byte("${CLIENT_SECRET}")},
+			},
+			want: true,
+		},
+		{
+			name: "exact mustache template is suppressed",
+			rule: &types.Rule{},
+			match: &types.Match{
+				SecretValue: []byte("{{ CLIENT_SECRET }}"),
+				Groups:      [][]byte{[]byte("{{ CLIENT_SECRET }}")},
+			},
+			want: true,
+		},
+		{
+			name: "exact ERB template is suppressed",
+			rule: &types.Rule{},
+			match: &types.Match{
+				SecretValue: []byte(`<%= ENV["CLIENT_SECRET"] %>`),
+				Groups:      [][]byte{[]byte(`<%= ENV["CLIENT_SECRET"] %>`)},
+			},
+			want: true,
+		},
+		{
+			name: "character requirements reject candidate",
+			rule: &types.Rule{PatternRequirements: &types.PatternRequirements{
+				MinDigits:    &minDigits,
+				MinUppercase: &minUppercase,
+			}},
+			match: &types.Match{
+				SecretValue: []byte("abcdef1"),
+				Groups:      [][]byte{[]byte("abcdef1")},
+			},
+			want: true,
+		},
+		{
+			name: "character requirements accept candidate",
+			rule: &types.Rule{PatternRequirements: &types.PatternRequirements{
+				MinDigits:    &minDigits,
+				MinUppercase: &minUppercase,
+			}},
+			match: &types.Match{
+				SecretValue: []byte("Abcdef12"),
+				Groups:      [][]byte{[]byte("Abcdef12")},
+			},
+			want: false,
+		},
+		{
+			name: "custom special-character set rejects candidate",
+			rule: &types.Rule{PatternRequirements: &types.PatternRequirements{
+				MinSpecialChars: &minSpecial,
+				SpecialChars:    &customSpecial,
+			}},
+			match: &types.Match{
+				SecretValue: []byte("abc:def"),
+				Groups:      [][]byte{[]byte("abc:def")},
+			},
+			want: true,
+		},
+		{
+			name: "custom special-character set accepts candidate",
+			rule: &types.Rule{PatternRequirements: &types.PatternRequirements{
+				MinSpecialChars: &minSpecial,
+				SpecialChars:    &customSpecial,
+			}},
+			match: &types.Match{
+				SecretValue: []byte("abc:-def"),
+				Groups:      [][]byte{[]byte("abc:-def")},
+			},
+			want: false,
+		},
+		{
+			name: "ignored substring uses full match for named pattern",
+			rule: &types.Rule{PatternRequirements: &types.PatternRequirements{
+				IgnoreIfContains: []string{"dummy"},
+			}},
+			match: &types.Match{
+				SecretValue:    []byte("A1b2C3d4"),
+				HasNamedGroups: true,
+				NamedGroups:    map[string][]byte{"key": []byte("A1b2C3d4")},
+				Snippet:        types.Snippet{Matching: []byte("dummy=A1b2C3d4")},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, shouldSuppressMatch(tc.rule, tc.match, nil))
+		})
+	}
+}
+
+func TestBuiltInRuleQualityPolicies(t *testing.T) {
+	t.Run("Azure dummy values", func(t *testing.T) {
+		rules := loadMatcherRulesByID(t, "np.azure.5")
+		rule := rules[0]
+		m, err := NewPortableRegexp(rules, 0)
+		require.NoError(t, err)
+		defer m.Close()
+
+		matches, err := m.Match([]byte(matcherExampleContaining(t, rule.NegativeExamples, "00000000")))
+		require.NoError(t, err)
+		require.Empty(t, matches)
+
+		matches, err = m.Match([]byte(rule.Examples[0]))
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+
+		matches, err = m.Match([]byte("// " + rule.Examples[0]))
+		require.NoError(t, err)
+		require.Len(t, matches, 1, "commented credentials can still be live and must not be suppressed generically")
+	})
+
+	t.Run("Zuplo checksum", func(t *testing.T) {
+		rules := loadMatcherRulesByID(t, "kingfisher.zuplo.1")
+		rule := rules[0]
+		m, err := NewPortableRegexp(rules, 0)
+		require.NoError(t, err)
+		defer m.Close()
+
+		matches, err := m.Match([]byte(rule.Examples[0]))
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+
+		matches, err = m.Match([]byte(matcherExampleWithChangedLastByte(t, rule.Examples[0])))
+		require.NoError(t, err)
+		require.Empty(t, matches)
+	})
+
+	t.Run("Confluent checksum", func(t *testing.T) {
+		rules := loadMatcherRulesByID(t, "kingfisher.confluent.3")
+		rule := rules[0]
+		m, err := NewPortableRegexp(rules, 0)
+		require.NoError(t, err)
+		defer m.Close()
+
+		matches, err := m.Match([]byte(rule.Examples[0]))
+		require.NoError(t, err)
+		require.Len(t, matches, 1)
+
+		matches, err = m.Match([]byte(matcherExampleWithChangedLastByte(t, rule.Examples[0])))
+		require.NoError(t, err)
+		require.Empty(t, matches)
+	})
 }
 
 func loadGenericPasswordRules(t *testing.T) []*types.Rule {
@@ -216,6 +397,40 @@ func loadMatcherRulesByID(t *testing.T, ruleIDs ...string) []*types.Rule {
 
 	require.Empty(t, wanted, "missing built-in matcher rules")
 	return filtered
+}
+
+func matcherRuleByID(t *testing.T, rules []*types.Rule, ruleID string) *types.Rule {
+	t.Helper()
+	for _, rule := range rules {
+		if rule.ID == ruleID {
+			return rule
+		}
+	}
+	t.Fatalf("missing matcher rule %s", ruleID)
+	return nil
+}
+
+func matcherExampleContaining(t *testing.T, examples []string, needle string) string {
+	t.Helper()
+	for _, example := range examples {
+		if strings.Contains(example, needle) {
+			return example
+		}
+	}
+	t.Fatalf("missing matcher example containing %q", needle)
+	return ""
+}
+
+func matcherExampleWithChangedLastByte(t *testing.T, example string) string {
+	t.Helper()
+	require.NotEmpty(t, example)
+	changed := []byte(example)
+	if changed[len(changed)-1] == '0' {
+		changed[len(changed)-1] = '1'
+	} else {
+		changed[len(changed)-1] = '0'
+	}
+	return string(changed)
 }
 
 func matchGroupValues(matches []*types.Match) []string {

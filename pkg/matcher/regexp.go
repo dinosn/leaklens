@@ -135,6 +135,7 @@ func (m *RegexpMatcher) MatchWithBlobID(content []byte, blobID types.BlobID) ([]
 					After:    after,
 				},
 			}
+			populateMatchPolicyMetadata(result, match, groupNames)
 
 			// Compute structural ID for deduplication
 			result.StructuralID = result.ComputeStructuralID(rule.StructuralID)
@@ -143,7 +144,7 @@ func (m *RegexpMatcher) MatchWithBlobID(content []byte, blobID types.BlobID) ([]
 			result.FindingID = types.ComputeFindingID(rule.StructuralID, groups)
 
 			// Deduplicate
-			if !shouldSuppressMatch(result, content) && !dedup.IsDuplicate(result) {
+			if !shouldSuppressMatch(rule, result, content) && !dedup.IsDuplicate(result) {
 				dedup.Add(result)
 				matches = append(matches, result)
 			}

@@ -2,7 +2,12 @@ package matcher
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"fmt"
+	"hash/crc32"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -10,9 +15,16 @@ import (
 	"github.com/dinosn/leaklens/pkg/types"
 )
 
-func shouldSuppressMatch(match *types.Match, content []byte) bool {
+const defaultSpecialCharacters = "!@#$%^&*()_+-=[]{}|;:'\",.<>?/\\`~"
+
+func shouldSuppressMatch(rule *types.Rule, match *types.Match, content []byte) bool {
 	if match == nil {
 		return false
+	}
+
+	candidate := matchSecretCandidate(match)
+	if isTemplatePlaceholder(string(candidate)) || failsRuleMatchPolicy(rule, match, candidate) {
+		return true
 	}
 
 	switch match.RuleID {
@@ -39,6 +51,238 @@ func shouldSuppressMatch(match *types.Match, content []byte) bool {
 	default:
 		return false
 	}
+}
+
+func failsRuleMatchPolicy(rule *types.Rule, match *types.Match, candidate []byte) bool {
+	if rule == nil {
+		return false
+	}
+	if rule.MinEntropy > 0 && shannonEntropy(candidate) <= rule.MinEntropy {
+		return true
+	}
+
+	requirements := rule.PatternRequirements
+	if requirements == nil {
+		return false
+	}
+
+	policyInput := candidate
+	if match.HasNamedGroups || match.CaptureGroupCount > 1 ||
+		len(match.NamedGroups) > 0 || len(match.Groups) > 1 {
+		policyInput = match.Snippet.Matching
+	}
+	value := string(policyInput)
+
+	if requirements.MinDigits != nil && countASCII(value, isASCIIDigit) < *requirements.MinDigits {
+		return true
+	}
+	if requirements.MinUppercase != nil && countASCII(value, isASCIIUpper) < *requirements.MinUppercase {
+		return true
+	}
+	if requirements.MinLowercase != nil && countASCII(value, isASCIILower) < *requirements.MinLowercase {
+		return true
+	}
+	if requirements.MinSpecialChars != nil {
+		specialCharacters := defaultSpecialCharacters
+		if requirements.SpecialChars != nil {
+			specialCharacters = *requirements.SpecialChars
+		}
+		count := 0
+		for _, char := range value {
+			if strings.ContainsRune(specialCharacters, char) {
+				count++
+			}
+		}
+		if count < *requirements.MinSpecialChars {
+			return true
+		}
+	}
+
+	lower := strings.ToLower(value)
+	for _, ignored := range requirements.IgnoreIfContains {
+		ignored = strings.TrimSpace(ignored)
+		if ignored != "" && strings.Contains(lower, strings.ToLower(ignored)) {
+			return true
+		}
+	}
+
+	if requirements.Checksum != nil && !checksumRequirementPasses(requirements.Checksum, match, value) {
+		return true
+	}
+	return false
+}
+
+func matchSecretCandidate(match *types.Match) []byte {
+	if len(match.SecretValue) > 0 {
+		return match.SecretValue
+	}
+	for name, value := range match.NamedGroups {
+		if strings.EqualFold(name, "token") && len(value) > 0 {
+			return value
+		}
+	}
+
+	if len(match.NamedGroups) > 0 {
+		names := make([]string, 0, len(match.NamedGroups))
+		for name := range match.NamedGroups {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if value := match.NamedGroups[name]; len(value) > 0 {
+				return value
+			}
+		}
+	}
+	if len(match.Groups) > 0 {
+		return match.Groups[0]
+	}
+	return match.Snippet.Matching
+}
+
+func isTemplatePlaceholder(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 4 {
+		return false
+	}
+	return (strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}")) ||
+		(strings.HasPrefix(value, "{{") && strings.HasSuffix(value, "}}")) ||
+		(strings.HasPrefix(value, "<%=") && strings.HasSuffix(value, "%>"))
+}
+
+func shannonEntropy(value []byte) float64 {
+	if len(value) == 0 {
+		return 0
+	}
+	counts := make(map[byte]float64, len(value))
+	for _, char := range value {
+		counts[char]++
+	}
+	length := float64(len(value))
+	entropy := 0.0
+	for _, count := range counts {
+		probability := count / length
+		entropy -= probability * math.Log2(probability)
+	}
+	return entropy
+}
+
+func countASCII(value string, predicate func(rune) bool) int {
+	count := 0
+	for _, char := range value {
+		if predicate(char) {
+			count++
+		}
+	}
+	return count
+}
+
+func isASCIIDigit(char rune) bool { return char >= '0' && char <= '9' }
+func isASCIIUpper(char rune) bool { return char >= 'A' && char <= 'Z' }
+func isASCIILower(char rune) bool { return char >= 'a' && char <= 'z' }
+
+func checksumRequirementPasses(requirement *types.ChecksumRequirement, match *types.Match, policyInput string) bool {
+	if requirement == nil {
+		return true
+	}
+	if required := requirement.Actual.RequiresCapture; required != "" {
+		if _, ok := match.NamedGroups[required]; !ok {
+			return requirement.SkipIfMissing
+		}
+	}
+
+	actual, actualOK := renderChecksumTemplate(requirement.Actual.Template, match, policyInput)
+	expected, expectedOK := renderChecksumTemplate(requirement.Expected, match, policyInput)
+	if !actualOK || !expectedOK {
+		// An unsupported custom checksum template must not hide a finding.
+		return true
+	}
+	return actual == expected
+}
+
+func renderChecksumTemplate(template string, match *types.Match, policyInput string) (string, bool) {
+	template = strings.TrimSpace(template)
+	if !strings.HasPrefix(template, "{{") || !strings.HasSuffix(template, "}}") {
+		return "", false
+	}
+	parts := strings.Split(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(template, "{{"), "}}")), "|")
+	if len(parts) == 0 {
+		return "", false
+	}
+
+	value, ok := checksumTemplateVariable(strings.TrimSpace(parts[0]), match, policyInput)
+	if !ok {
+		return "", false
+	}
+	for _, rawFilter := range parts[1:] {
+		filterParts := strings.SplitN(strings.TrimSpace(rawFilter), ":", 2)
+		name := strings.TrimSpace(filterParts[0])
+		argument := -1
+		if len(filterParts) == 2 {
+			parsed, err := strconv.Atoi(strings.TrimSpace(filterParts[1]))
+			if err != nil || parsed < 0 {
+				return "", false
+			}
+			argument = parsed
+		}
+
+		switch name {
+		case "downcase":
+			if argument >= 0 {
+				return "", false
+			}
+			value = strings.ToLower(value)
+		case "suffix":
+			if argument < 0 {
+				return "", false
+			}
+			runes := []rune(value)
+			if argument < len(runes) {
+				runes = runes[len(runes)-argument:]
+			}
+			value = string(runes)
+		case "crc32_hex":
+			checksum := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(value)))
+			if argument > 0 {
+				digits := argument
+				if digits > 32 {
+					digits = 32
+				}
+				if digits < len(checksum) {
+					checksum = checksum[len(checksum)-digits:]
+				} else if digits > len(checksum) {
+					checksum = strings.Repeat("0", digits-len(checksum)) + checksum
+				}
+			}
+			value = checksum
+		case "crc32_le_b64":
+			checksum := crc32.ChecksumIEEE([]byte(value))
+			var encoded [4]byte
+			binary.LittleEndian.PutUint32(encoded[:], checksum)
+			value = base64.StdEncoding.EncodeToString(encoded[:])
+			if argument >= 0 && argument < len(value) {
+				value = value[:argument]
+			}
+		default:
+			return "", false
+		}
+	}
+	return value, true
+}
+
+func checksumTemplateVariable(name string, match *types.Match, policyInput string) (string, bool) {
+	if strings.EqualFold(name, "MATCH") {
+		return policyInput, true
+	}
+	if strings.EqualFold(name, "FULL_MATCH") {
+		return string(match.Snippet.Matching), true
+	}
+	for captureName, value := range match.NamedGroups {
+		if strings.EqualFold(name, captureName) {
+			return string(value), true
+		}
+	}
+	return "", false
 }
 
 func isLikelyClientSecretCandidate(value string) bool {
