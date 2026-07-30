@@ -14,9 +14,10 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name    string
-		content string
-		want    bool
+		name      string
+		content   string
+		want      bool
+		wantToken string
 	}{
 		{
 			name:    "observed g_ac convention",
@@ -77,6 +78,12 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			name:    "short literal AES ECB PKCS7 passphrase",
 			content: `CryptoJS.AES.encrypt(password,"SyntK3y!",{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7})`,
 			want:    true,
+		},
+		{
+			name:      "comma-declared minified passphrase flows directly into AES",
+			content:   `const c=loadCrypto(),q="S7nthetic/passphrase";function e(v){return c.AES.encrypt(v,q).toString()}`,
+			want:      true,
+			wantToken: "S7nthetic/passphrase",
 		},
 		{
 			name:    "direct UTF8 parsed literal flows into AES key argument",
@@ -164,6 +171,16 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:    "variable-backed passphrase used only as iv is not AES key",
+			content: `const q="S7nthetic/passphrase";CryptoJS.AES.encrypt(payload,runtimeKey,{iv:q})`,
+			want:    false,
+		},
+		{
+			name:    "variable-backed passphrase used as plaintext is not AES key",
+			content: `const q="S7nthetic/passphrase";CryptoJS.AES.encrypt(q,runtimeKey)`,
+			want:    false,
+		},
+		{
 			name:    "direct UTF8 parsed literal used as IV is not AES key",
 			content: `var iv=CryptoJS.enc.Utf8.parse("Synthet1cIVSeed!");CryptoJS.AES.encrypt(payload,runtimeKey,{iv:iv,mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7})`,
 			want:    false,
@@ -202,6 +219,10 @@ func TestClientSideAESKeyCandidate(t *testing.T) {
 			if tt.want {
 				require.Len(t, matches, 1)
 				require.Equal(t, "leaklens.js.crypto.1", matches[0].RuleID)
+				if tt.wantToken != "" {
+					require.Equal(t, []byte(tt.wantToken), matches[0].NamedGroups["token"])
+					require.Equal(t, []byte(tt.wantToken), matches[0].SecretValue)
+				}
 				return
 			}
 			require.Empty(t, matches)

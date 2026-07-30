@@ -110,6 +110,24 @@ rules:
         )
         ["'] \s* (?:,|\))
       |
+        (?P<variable_aes_passphrase_source>[A-Za-z_$][\w$]{0,63})
+        \s* = \s*
+        ["']
+        (?P<token>
+          (?=[^\s"'\\]{8,128}["'])
+          (?=[^\s"'\\]*[A-Za-z])
+          (?=[^\s"'\\]*(?:[0-9]|[^A-Za-z0-9\s"'\\]))
+          [^\s"'\\]{8,128}
+        )
+        ["']
+        (?=
+          [\s\S]{0,2000}
+          (?P<variable_aes_alias>[A-Za-z_$][\w$]{0,63})
+          \s* \. \s* AES \s* \. \s* (?:encrypt|decrypt)
+          \s* \( [^,;\r\n]{1,700} , \s*
+          \k<variable_aes_passphrase_source> \b
+        )
+      |
         (?:var|let|const) \s+
         (?P<direct_parsed_crypto_key_var>[A-Za-z_$][\w$]{0,63})
         \s* = \s*
@@ -245,6 +263,7 @@ rules:
       - 'CryptoJS.AES.encrypt(payload,"S7nthetic/passphrase")'
       - 'crypto.AES.decrypt(ciphertext,"S7nthetic/passphrase")'
       - 'CryptoJS.AES.encrypt(password,"SyntK3y!",{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7})'
+      - 'const c=loadCrypto(),q="S7nthetic/passphrase";function e(v){return c.AES.encrypt(v,q).toString()}'
       - 'var key=CryptoJS.enc.Utf8.parse("Synthet1cKeySeed");var input=CryptoJS.enc.Utf8.parse(value);CryptoJS.AES.encrypt(input,key,{mode:CryptoJS.mode.ECB,padding:CryptoJS.pad.Pkcs7})'
       - 'const a="SyntK3y!";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
       - 'const a="S7nthetic/pass123";function e(p){const k=c.enc.Utf8.parse(a);return c.AES.encrypt(p,k,{mode:c.mode.ECB,padding:c.pad.Pkcs7}).toString()}'
@@ -263,6 +282,8 @@ rules:
       - 'CryptoJS.AES.encrypt(payload,"short1!")'
       - 'CryptoJS.AES.encrypt(payload,"short1!",{mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7})'
       - 'CryptoJS.AES.encrypt(payload,runtimeKey,{label:"S7nthetic/passphrase"})'
+      - 'const q="S7nthetic/passphrase";CryptoJS.AES.encrypt(payload,runtimeKey,{iv:q})'
+      - 'const q="S7nthetic/passphrase";CryptoJS.AES.encrypt(q,runtimeKey)'
       - 'var iv=CryptoJS.enc.Utf8.parse("Synthet1cIVSeed!");CryptoJS.AES.encrypt(payload,runtimeKey,{iv:iv,mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7})'
       - 'const a="S7nthetic/pass123";function e(p){const iv=c.enc.Utf8.parse(a);return c.AES.encrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString()}'
       - 'function e(p,a="S7nthetic/pass123"){const iv=c.enc.Utf8.parse(a);return c.AES.decrypt(p,runtimeKey,{iv:iv,mode:c.mode.CBC,padding:c.pad.Pkcs7}).toString(c.enc.Utf8)}'
@@ -274,7 +295,7 @@ rules:
       JavaScript. The detector covers semantic AES/crypto/cipher key names,
       quoted hex-encoded AES key properties, narrow minified AES length-guard
       patterns, React configuration values proven to flow into an AES call,
-      literal AES key/passphrase arguments, direct and variable-backed CryptoJS
+      literal and variable-backed AES key/passphrase arguments, direct and variable-backed CryptoJS
       Utf8-parsed keys, PBKDF2-derived passphrases proven to flow into AES, and the observed g_ac convention
       while avoiding generic key and string matches.
   - name: Client-Side AES Password Encryption Flow
