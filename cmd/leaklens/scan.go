@@ -50,6 +50,7 @@ const (
 	defaultCrawlTimeout     = "5m"
 	defaultCrawlExtensions  = "js,json,map"
 	defaultCrawlScope       = "rdn"
+	defaultCrawlMaxPages    = 1000
 	defaultDNSCheckTimeout  = 5 * time.Second
 	defaultScanMaxFileSize  = 20 * 1024 * 1024
 )
@@ -196,7 +197,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanCrawlExtensions, "crawl-extensions", defaultCrawlExtensions, "File extensions to match during crawl (comma-separated)")
 	scanCmd.Flags().StringVar(&scanCrawlScope, "crawl-scope", defaultCrawlScope, "Crawl scope: rdn (registered domain), dn (domain name), fqdn (exact hostname)")
 	scanCmd.Flags().StringVar(&scanCrawlBaseURL, "crawl-base-url", "", "Application base URL for repairing JS-discovered relative paths")
-	scanCmd.Flags().IntVar(&scanCrawlMaxDomainPages, "crawl-max-domain-pages", 0, "Maximum pages to crawl per domain (0 = unlimited)")
+	scanCmd.Flags().IntVar(&scanCrawlMaxDomainPages, "crawl-max-domain-pages", defaultCrawlMaxPages, "Maximum pages to crawl per host before a probable-recursion warning (0 = unlimited)")
 	scanCmd.Flags().StringVar(&scanCrawlChromeDataDir, "crawl-chrome-data-dir", "", "Chrome user-data-dir to preserve crawl sessions")
 	scanCmd.Flags().StringVar(&scanCrawlChromeWSURL, "crawl-chrome-ws-url", "", "Chrome DevTools websocket URL to attach to an existing browser")
 	scanCmd.Flags().StringVar(&scanCrawlSystemChrome, "crawl-system-chrome-path", "", "Chrome/Chromium binary path for headless crawling")

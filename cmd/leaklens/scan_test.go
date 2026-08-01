@@ -59,6 +59,16 @@ func TestScanCommand_DefaultCrawlTimeoutIsFiveMinutes(t *testing.T) {
 		"default crawl timeout should allow larger JS-heavy applications")
 }
 
+func TestScanCommand_DefaultCrawlHasPerHostPageCap(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"scan"})
+	require.NoError(t, err)
+
+	flag := cmd.Flags().Lookup("crawl-max-domain-pages")
+	require.NotNil(t, flag, "--crawl-max-domain-pages flag should exist")
+	assert.Equal(t, "1000", flag.DefValue,
+		"default crawl should stop pathological per-host expansion before an unbounded timeout")
+}
+
 func TestScanCommand_DownloadDirFlagExists(t *testing.T) {
 	cmd, _, err := rootCmd.Find([]string{"scan"})
 	require.NoError(t, err)

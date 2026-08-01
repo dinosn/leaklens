@@ -2,6 +2,7 @@ package enum
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +33,10 @@ import (
 	"github.com/dinosn/leaklens/pkg/types"
 )
 
-const maxNestedJSAssetDiscovery = 1000
+const (
+	maxNestedJSAssetDiscovery         = 1000
+	maxRepeatedPathSegmentOccurrences = 2
+)
 
 var (
 	quotedJSAssetPattern       = regexp.MustCompile(`["'\x60]([^"'\x60]+?\.(?:js|json|map)(?:\?[^"'\x60]*)?)["'\x60]`)
@@ -40,6 +44,7 @@ var (
 	webpackChunkMapEntryRegexp = regexp.MustCompile(`(\d+):["']([A-Za-z0-9]+)["']`)
 	webpackPublicPathPattern   = regexp.MustCompile(`\.p\s*=\s*["']([^"']*)["']`)
 	sourceMappingURLPattern    = regexp.MustCompile(`(?m)(?://[#@]|/\*[#@])\s*sourceMappingURL=([^\s*]+)`)
+	errUnexpectedHTMLJSAsset   = errors.New("unexpected HTML response for JS asset")
 )
 
 // CrawlEnumerator crawls a target URL and enumerates discovered files for scanning.
@@ -73,6 +78,152 @@ type initialPageDiscovery struct {
 	URLs    []string
 	Content []byte
 	URL     string
+}
+
+// crawlSanityGuard bounds crawler output and identifies HTML fallback pages
+// before Katana parses them into another generation of relative URLs.
+type crawlSanityGuard struct {
+	mu sync.Mutex
+
+	entryURL    string
+	entryDigest [sha256.Size]byte
+	entryIsHTML bool
+
+	maxPerHost           int
+	discoveriesByHost    map[string]int
+	resultsByHost        map[string]int
+	warnedDiscoveryCap   map[string]bool
+	warnedResultCap      map[string]bool
+	warnedFallback       bool
+	warnedPathRepetition bool
+}
+
+func newCrawlSanityGuard(maxPerHost int) *crawlSanityGuard {
+	return &crawlSanityGuard{
+		maxPerHost:         maxPerHost,
+		discoveriesByHost:  make(map[string]int),
+		resultsByHost:      make(map[string]int),
+		warnedDiscoveryCap: make(map[string]bool),
+		warnedResultCap:    make(map[string]bool),
+	}
+}
+
+func (g *crawlSanityGuard) setEntry(rawURL string, body []byte) {
+	if len(body) == 0 {
+		return
+	}
+	g.mu.Lock()
+	g.entryURL = rawURL
+	g.entryDigest = sha256.Sum256(body)
+	g.entryIsHTML = responseLooksHTML("", body)
+	g.mu.Unlock()
+}
+
+func (g *crawlSanityGuard) shouldSuppressResult(r katanaoutput.Result, extensions []string) (bool, string, bool) {
+	if r.Request == nil || r.Request.URL == "" {
+		return false, "", false
+	}
+	rawURL := r.Request.URL
+	if hasExcessivePathSegmentRepetition(rawURL, maxRepeatedPathSegmentOccurrences) {
+		g.mu.Lock()
+		warn := !g.warnedPathRepetition
+		g.warnedPathRepetition = true
+		g.mu.Unlock()
+		return true, "repeated path segment exceeded the safety limit", warn
+	}
+	if r.Response == nil || !urlMatchesExtensions(rawURL, extensions) {
+		return false, "", false
+	}
+
+	body := []byte(r.Response.Body)
+	contentType := ""
+	if r.Response.Resp != nil {
+		contentType = r.Response.Resp.Header.Get("Content-Type")
+	}
+
+	g.mu.Lock()
+	entryURL := g.entryURL
+	entryDigest := g.entryDigest
+	entryIsHTML := g.entryIsHTML
+	g.mu.Unlock()
+
+	matchesEntryHTML := len(body) > 0 && entryIsHTML && rawURL != entryURL && sha256.Sum256(body) == entryDigest
+	if !matchesEntryHTML && !responseLooksHTML(contentType, body) {
+		return false, "", false
+	}
+
+	g.mu.Lock()
+	warn := !g.warnedFallback
+	g.warnedFallback = true
+	g.mu.Unlock()
+	if matchesEntryHTML {
+		return true, "asset response is byte-identical to the entry HTML", warn
+	}
+	return true, "asset URL returned HTML instead of the requested asset type", warn
+}
+
+func (g *crawlSanityGuard) allowDiscovery(rawURL string) (bool, string, bool) {
+	if hasExcessivePathSegmentRepetition(rawURL, maxRepeatedPathSegmentOccurrences) {
+		g.mu.Lock()
+		warn := !g.warnedPathRepetition
+		g.warnedPathRepetition = true
+		g.mu.Unlock()
+		return false, "probable SPA fallback recursion: repeated path segment exceeded the safety limit", warn
+	}
+	if g.maxPerHost <= 0 {
+		return true, "", false
+	}
+	host := discoveryHost(rawURL)
+	if host == "" {
+		return true, "", false
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.discoveriesByHost[host] >= g.maxPerHost {
+		warn := !g.warnedDiscoveryCap[host]
+		g.warnedDiscoveryCap[host] = true
+		return false, fmt.Sprintf("crawl discovery cap hit for host %s (%d); probable fallback recursion or unusually large crawl", host, g.maxPerHost), warn
+	}
+	g.discoveriesByHost[host]++
+	return true, "", false
+}
+
+func (g *crawlSanityGuard) observeResult(rawURL string) (bool, string, bool) {
+	if g.maxPerHost <= 0 {
+		return false, "", false
+	}
+	host := discoveryHost(rawURL)
+	if host == "" {
+		return false, "", false
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.resultsByHost[host]++
+	if g.resultsByHost[host] < g.maxPerHost {
+		return false, "", false
+	}
+	warn := !g.warnedResultCap[host]
+	g.warnedResultCap[host] = true
+	return true, fmt.Sprintf("crawl page cap hit for host %s (%d); probable fallback recursion or unusually large crawl", host, g.maxPerHost), warn
+}
+
+func suppressCrawlResultExpansion(r katanaoutput.Result) {
+	if r.Response == nil {
+		return
+	}
+	r.Response.Body = ""
+	r.Response.Reader = nil
+	r.Response.Resp = nil
+}
+
+func discoveryHost(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(parsed.Hostname())
 }
 
 // CrawlConfig holds configuration for the crawl enumerator.
@@ -182,6 +333,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	var discoveredCandidates [][]string
 	var acceptingResults atomic.Bool
 	acceptingResults.Store(true)
+	sanityGuard := newCrawlSanityGuard(e.MaxDomainPages)
 
 	addDiscoveredURL := func(rawURL string) {
 		if rawURL == "" {
@@ -197,16 +349,26 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 		candidates := e.urlCandidates(rawURL)
 		key := strings.Join(candidates, "\x00")
 		mu.Lock()
-		defer mu.Unlock()
 		if !acceptingResults.Load() {
+			mu.Unlock()
 			return
 		}
 		if _, dup := seen[key]; dup {
+			mu.Unlock()
+			return
+		}
+		allowed, reason, shouldWarn := sanityGuard.allowDiscovery(rawURL)
+		if !allowed {
+			mu.Unlock()
+			if shouldWarn {
+				warnf("warning: %s; rejecting %s\n", reason, rawURL)
+			}
 			return
 		}
 		seen[key] = struct{}{}
 		discoveredURLs = append(discoveredURLs, rawURL)
 		discoveredCandidates = append(discoveredCandidates, candidates)
+		mu.Unlock()
 		warnf("  found: %s\n", rawURL)
 	}
 
@@ -253,7 +415,24 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 			if rawURL == "" {
 				return
 			}
+			pageCapHit, pageCapReason, warnPageCap := sanityGuard.observeResult(rawURL)
+			if suppress, reason, shouldWarn := sanityGuard.shouldSuppressResult(r, e.Extensions); suppress {
+				suppressCrawlResultExpansion(r)
+				if shouldWarn {
+					warnf("warning: probable SPA fallback recursion: %s at %s; suppressing crawl expansion\n", reason, rawURL)
+				}
+				if warnPageCap {
+					warnf("warning: %s; suppressing further crawl expansion\n", pageCapReason)
+				}
+				return
+			}
 			addDiscoveredURL(rawURL)
+			if pageCapHit {
+				suppressCrawlResultExpansion(r)
+				if warnPageCap {
+					warnf("warning: %s; suppressing further crawl expansion\n", pageCapReason)
+				}
+			}
 		},
 	}
 
@@ -331,6 +510,7 @@ func (e *CrawlEnumerator) Enumerate(ctx context.Context, callback func(content [
 	if initialErr != nil {
 		warnf("warning: initial HTML asset discovery failed: %v\n", initialErr)
 	} else {
+		sanityGuard.setEntry(initialPage.URL, initialPage.Content)
 		for _, rawURL := range initialPage.URLs {
 			addDiscoveredURL(rawURL)
 		}
@@ -649,10 +829,17 @@ func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURL
 		timeout = e.Timeout
 	}
 	client := newTLSFallbackHTTPClient(timeout)
+	discoveryLimit := maxNestedJSAssetDiscovery
+	if e.MaxDomainPages > 0 && e.MaxDomainPages < discoveryLimit {
+		discoveryLimit = e.MaxDomainPages
+	}
 	queued := make(map[string]bool)
 	seenAsset := make(map[string]bool)
 	queue := make([]string, 0, len(seedURLs))
 	for _, rawURL := range seedURLs {
+		if hasExcessivePathSegmentRepetition(rawURL, maxRepeatedPathSegmentOccurrences) {
+			continue
+		}
 		seenAsset[rawURL] = true
 		if isJavaScriptURL(rawURL) {
 			queued[rawURL] = true
@@ -661,7 +848,10 @@ func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURL
 	}
 
 	var discovered []string
-	for len(queue) > 0 && len(discovered) < maxNestedJSAssetDiscovery {
+	invalidHTMLAssets := make(map[string]struct{})
+	fallbackWarned := false
+	pathWarned := false
+	for len(queue) > 0 && len(discovered) < discoveryLimit {
 		if ctx.Err() != nil {
 			return discovered
 		}
@@ -669,13 +859,27 @@ func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURL
 		queue = queue[1:]
 		body, responseURL, err := fetchJSAssetForDiscovery(ctx, client, current, e.MaxSize)
 		if err != nil {
+			if errors.Is(err, errUnexpectedHTMLJSAsset) && !fallbackWarned {
+				warnf("warning: probable SPA fallback recursion: JS asset URL %s returned HTML; suppressing nested asset expansion\n", current)
+				fallbackWarned = true
+			}
+			if errors.Is(err, errUnexpectedHTMLJSAsset) {
+				invalidHTMLAssets[current] = struct{}{}
+			}
 			continue
 		}
 		for _, rawURL := range extractJSAssetURLs(responseURL, body, e.Extensions) {
-			if len(discovered) >= maxNestedJSAssetDiscovery {
+			if len(discovered) >= discoveryLimit {
 				break
 			}
 			if !e.urlInScope(rawURL) || !urlMatchesExtensions(rawURL, e.Extensions) {
+				continue
+			}
+			if hasExcessivePathSegmentRepetition(rawURL, maxRepeatedPathSegmentOccurrences) {
+				if !pathWarned {
+					warnf("warning: probable SPA fallback recursion: repeated path segment exceeded the safety limit; rejecting %s\n", rawURL)
+					pathWarned = true
+				}
 				continue
 			}
 			if seenAsset[rawURL] {
@@ -688,6 +892,18 @@ func (e *CrawlEnumerator) discoverNestedJSAssetURLs(ctx context.Context, seedURL
 				queue = append(queue, rawURL)
 			}
 		}
+	}
+	if len(queue) > 0 && len(discovered) >= discoveryLimit {
+		warnf("warning: nested JS discovery cap hit (%d); probable fallback recursion or unusually large crawl\n", discoveryLimit)
+	}
+	if len(invalidHTMLAssets) > 0 {
+		filtered := discovered[:0]
+		for _, rawURL := range discovered {
+			if _, invalid := invalidHTMLAssets[rawURL]; !invalid {
+				filtered = append(filtered, rawURL)
+			}
+		}
+		discovered = filtered
 	}
 	return discovered
 }
@@ -705,6 +921,9 @@ func (e *CrawlEnumerator) discoverNestedJSONAssetURLs(ctx context.Context, seedU
 	seenAsset := make(map[string]bool)
 	queue := make([]string, 0, len(seedURLs))
 	for _, rawURL := range seedURLs {
+		if hasExcessivePathSegmentRepetition(rawURL, maxRepeatedPathSegmentOccurrences) {
+			continue
+		}
 		seenAsset[rawURL] = true
 		if isJSONAssetURL(rawURL) {
 			queued[rawURL] = true
@@ -728,6 +947,9 @@ func (e *CrawlEnumerator) discoverNestedJSONAssetURLs(ctx context.Context, seedU
 				break
 			}
 			if !e.urlInScope(candidate) || seenAsset[candidate] {
+				continue
+			}
+			if hasExcessivePathSegmentRepetition(candidate, maxRepeatedPathSegmentOccurrences) {
 				continue
 			}
 			seenAsset[candidate] = true
@@ -802,6 +1024,9 @@ func fetchJSAssetForDiscovery(ctx context.Context, client *http.Client, rawURL s
 	}
 	if int64(len(body)) > maxSize {
 		return nil, nil, fmt.Errorf("JS asset too large")
+	}
+	if responseLooksHTML(resp.Header.Get("Content-Type"), body) {
+		return nil, nil, errUnexpectedHTMLJSAsset
 	}
 	return body, resp.Request.URL, nil
 }
@@ -1121,6 +1346,18 @@ func sourceMapResponseOK(resp *http.Response) bool {
 	return !strings.Contains(contentType, "text/html")
 }
 
+func responseLooksHTML(contentType string, body []byte) bool {
+	contentType = strings.ToLower(contentType)
+	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
+		return true
+	}
+	if len(body) == 0 {
+		return false
+	}
+	detected := strings.ToLower(http.DetectContentType(body))
+	return strings.Contains(detected, "text/html") || strings.Contains(detected, "application/xhtml+xml")
+}
+
 func extensionEnabled(extensions []string, ext string) bool {
 	ext = strings.TrimPrefix(strings.ToLower(ext), ".")
 	for _, value := range extensions {
@@ -1380,6 +1617,26 @@ func splitPathSegments(rawPath string) []string {
 		}
 	}
 	return out
+}
+
+func hasExcessivePathSegmentRepetition(rawURL string, maxOccurrences int) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	decodedPath, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil {
+		decodedPath = parsed.Path
+	}
+	counts := make(map[string]int)
+	for _, segment := range splitPathSegments(decodedPath) {
+		segment = strings.ToLower(segment)
+		counts[segment]++
+		if counts[segment] > maxOccurrences {
+			return true
+		}
+	}
+	return false
 }
 
 func hasSegmentPrefix(values, prefix []string) bool {

@@ -10,7 +10,13 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/dinosn/leaklens/pkg/types"
+	"github.com/projectdiscovery/katana/pkg/navigation"
+	katanaoutput "github.com/projectdiscovery/katana/pkg/output"
 )
 
 func TestCrawlURLCandidatesRepairDuplicatedScriptPath(t *testing.T) {
@@ -491,5 +497,188 @@ func TestExtractJSAssetURLsRepairsDuplicatedRelativeAssetDirAndSkipsTemplates(t 
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected JS asset URLs:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestCrawlDoesNotRecurseThroughSPAFallbackHTML(t *testing.T) {
+	const entryHTML = `<!doctype html><html><head><script src="assets/main.js"></script></head></html>`
+
+	var mu sync.Mutex
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, entryHTML)
+		case "/assets/main.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, `const lazyChunk = "missing.js";`)
+		default:
+			// Include a path marker so Katana's own whole-body deduplication does
+			// not hide the failure mode this LeakLens guard must stop. Real SPA
+			// fallbacks may vary by nonce, request ID, or injected path.
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, "%s<!-- %s -->", entryHTML, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var logs bytes.Buffer
+	restore := SetLogOutput(&logs)
+	defer restore()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:      server.URL + "/",
+		MaxDepth:       8,
+		Concurrency:    1,
+		Timeout:        3 * time.Second,
+		JSCrawl:        true,
+		Extensions:     []string{"js"},
+		Scope:          "fqdn",
+		MaxDomainPages: 40,
+		BrowserCapture: false,
+	})
+
+	err := enumerator.Enumerate(context.Background(), func(content []byte, blobID types.BlobID, prov types.Provenance) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("crawl failed: %v", err)
+	}
+
+	mu.Lock()
+	paths := append([]string(nil), requestedPaths...)
+	mu.Unlock()
+	for _, requestedPath := range paths {
+		if hasExcessivePathSegmentRepetition(requestedPath, 2) {
+			t.Fatalf("SPA fallback recursion reached repeated path %q; requests: %#v", requestedPath, paths)
+		}
+	}
+	if got := logs.String(); !strings.Contains(got, "probable SPA fallback recursion") {
+		t.Fatalf("expected a loud SPA fallback warning; requests: %#v; logs: %s", paths, got)
+	}
+}
+
+func TestFetchJSAssetForDiscoveryRejectsHTML(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<!doctype html><script src="assets/main.js"></script>`)
+	}))
+	defer server.Close()
+
+	_, _, err := fetchJSAssetForDiscovery(context.Background(), server.Client(), server.URL+"/missing.js", 1<<20)
+	if err == nil {
+		t.Fatal("expected HTML returned for a .js URL to be rejected")
+	}
+}
+
+func TestNestedJSDiscoveryStopsAtSPAFallbackHTML(t *testing.T) {
+	const entryHTML = `<!doctype html><script src="assets/main.js"></script>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/assets/main.js" {
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, `const lazyChunk = "missing.js";`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, entryHTML)
+	}))
+	defer server.Close()
+
+	var logs bytes.Buffer
+	restore := SetLogOutput(&logs)
+	defer restore()
+
+	enumerator := NewCrawlEnumerator(CrawlConfig{
+		TargetURL:  server.URL + "/",
+		Extensions: []string{"js"},
+		Scope:      "fqdn",
+	})
+	got := enumerator.discoverNestedJSAssetURLs(context.Background(), []string{server.URL + "/assets/main.js"})
+	if len(got) != 0 {
+		t.Fatalf("HTML fallback remained a nested asset candidate: %#v", got)
+	}
+	if output := logs.String(); !strings.Contains(output, "probable SPA fallback recursion") {
+		t.Fatalf("expected SPA fallback warning, got logs: %s", output)
+	}
+}
+
+func TestHasExcessivePathSegmentRepetition(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{name: "two repetitions allowed", rawURL: "https://app.example.test/static/js/static/config.js", want: false},
+		{name: "third nonconsecutive repetition rejected", rawURL: "https://app.example.test/static/js/vendor/static/chunks/static/config.js", want: true},
+		{name: "third encoded repetition rejected", rawURL: "https://app.example.test/static%2Fjs%2Fstatic%2Fjs%2Fstatic%2Fconfig.js", want: true},
+		{name: "query ignored", rawURL: "https://app.example.test/assets/main.js?next=/assets/assets/assets", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasExcessivePathSegmentRepetition(tt.rawURL, 2); got != tt.want {
+				t.Fatalf("hasExcessivePathSegmentRepetition(%q, 2) = %v, want %v", tt.rawURL, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCrawlSanityGuardSuppressesEntryHTMLAtAssetURL(t *testing.T) {
+	const entryURL = "https://app.example.test/"
+	body := []byte(`<!doctype html><script src="/assets/main.js"></script>`)
+	guard := newCrawlSanityGuard(1000)
+	guard.setEntry(entryURL, body)
+
+	httpRequest, err := http.NewRequest(http.MethodGet, "https://app.example.test/assets/missing.js", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := katanaoutput.Result{
+		Request: &navigation.Request{URL: httpRequest.URL.String()},
+		Response: &navigation.Response{
+			Body: string(body),
+			Resp: &http.Response{
+				Header:  http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+				Request: httpRequest,
+			},
+		},
+	}
+
+	suppress, reason, shouldWarn := guard.shouldSuppressResult(result, []string{"js"})
+	if !suppress || !shouldWarn {
+		t.Fatalf("expected entry-HTML asset response to be suppressed with a warning, got suppress=%v warn=%v", suppress, shouldWarn)
+	}
+	if !strings.Contains(reason, "byte-identical to the entry HTML") {
+		t.Fatalf("unexpected suppression reason: %q", reason)
+	}
+	suppressCrawlResultExpansion(result)
+	if result.Response.Resp != nil || result.Response.Reader != nil || result.Response.Body != "" {
+		t.Fatalf("suppressed result remained parseable: %#v", result.Response)
+	}
+}
+
+func TestCrawlSanityGuardDiscoveryCap(t *testing.T) {
+	guard := newCrawlSanityGuard(2)
+	for _, rawURL := range []string{
+		"https://app.example.test/assets/one.js",
+		"https://app.example.test/assets/two.js",
+	} {
+		allowed, reason, shouldWarn := guard.allowDiscovery(rawURL)
+		if !allowed || reason != "" || shouldWarn {
+			t.Fatalf("expected discovery below cap to be allowed: allowed=%v reason=%q warn=%v", allowed, reason, shouldWarn)
+		}
+	}
+
+	allowed, reason, shouldWarn := guard.allowDiscovery("https://app.example.test/assets/three.js")
+	if allowed || !shouldWarn {
+		t.Fatalf("expected third discovery to hit cap with warning: allowed=%v warn=%v", allowed, shouldWarn)
+	}
+	if !strings.Contains(reason, "cap hit") || !strings.Contains(reason, "probable fallback recursion") {
+		t.Fatalf("unexpected cap reason: %q", reason)
 	}
 }
