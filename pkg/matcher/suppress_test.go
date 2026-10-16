@@ -172,6 +172,28 @@ func TestLikelyOpaqueSecretCandidate(t *testing.T) {
 	}
 }
 
+func TestLikelyAPISecretCandidate(t *testing.T) {
+	testCases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "eight character mixed secret", value: "Q7vN2mX9", want: true},
+		{name: "seven character secret", value: "Q7vN2mX", want: false},
+		{name: "letters only", value: "abcdefgh", want: false},
+		{name: "digits only", value: "12345678", want: false},
+		{name: "low diversity", value: "A1A1A1A1", want: false},
+		{name: "obvious placeholder", value: "YOUR_API_SECRET_123", want: false},
+		{name: "test placeholder", value: "test-api-secret-123", want: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isLikelyAPISecretCandidate(tc.value))
+		})
+	}
+}
+
 func TestShouldSuppressOpaqueSecretUsesNamedCapture(t *testing.T) {
 	for _, ruleID := range []string{
 		"leaklens.http.query-secret.1",

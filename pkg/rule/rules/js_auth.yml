@@ -23,6 +23,31 @@ rules:
       should be replaced with a server-side token exchange or a public-client
       authorization flow.
 
+  - name: JavaScript API Secret Literal
+    id: leaklens.js.api-secret.1
+    pattern: |-
+      (?i)["']?\bapi[_-]?secret\b["']?\s*(?::=|=>|=|:)\s*["'](?P<api_secret>[a-z0-9][a-z0-9._~+/\-]{6,254}[a-z0-9]={0,2})["']
+
+    categories: [js, secret, fuzzy, generic]
+
+    examples:
+      - 'const config = {apiUrl: "https://api.example.test/", apiSecret: "Q7vN2mX9"};'
+      - 'const API_SECRET = "Z8rM3pQ6";'
+      - '{"api-secret":"M4kP8vR2"}'
+
+    negative_examples:
+      - 'const config = {apiSecret: runtime.apiSecret};'
+      - 'const config = {apiSecret: "YOUR_API_SECRET_123"};'
+      - 'const config = {apiSecret: "abcdefgh"};'
+      - 'const apiSecretLabel = "Application API secret";'
+
+    description: >
+      A credential-like literal is assigned to an API-secret property in
+      JavaScript. The exact property context allows short, high-diversity
+      values that are intentionally excluded from broad generic-secret rules.
+      Secrets delivered to browser code must be treated as exposed and moved
+      behind a server-side API boundary.
+
   - name: Client-Side Basic Authentication Credential Flow
     id: leaklens.js.basic-auth-flow.1
     pattern: |-

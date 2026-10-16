@@ -42,6 +42,12 @@ func shouldSuppressMatch(rule *types.Rule, match *types.Match, content []byte) b
 			value = match.Groups[len(match.Groups)-1]
 		}
 		return !isLikelyClientSecretCandidate(string(value))
+	case "leaklens.js.api-secret.1":
+		value := match.NamedGroups["api_secret"]
+		if len(value) == 0 && len(match.Groups) > 0 {
+			value = match.Groups[len(match.Groups)-1]
+		}
+		return !isLikelyAPISecretCandidate(string(value))
 	case "leaklens.http.query-secret.1", "leaklens.http.api-key-header.1":
 		value := match.NamedGroups["token"]
 		if len(value) == 0 && len(match.Groups) > 0 {
@@ -303,6 +309,24 @@ func isLikelyClientSecretCandidate(value string) bool {
 	})
 }
 
+func isLikelyAPISecretCandidate(value string) bool {
+	if !isLikelyOpaqueSecretCandidateWithMinLength(value, 8) {
+		return false
+	}
+
+	compact := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(value))
+	return !containsAny(compact, []string{
+		"yourapisecret",
+		"apisecrethere",
+		"testapisecret",
+		"mockapisecret",
+		"fakeapisecret",
+		"demoapisecret",
+		"notasecret",
+		"secretvalue",
+	})
+}
+
 func isInputTypeTranslationLabel(match *types.Match, content []byte) bool {
 	if len(match.Groups) == 0 || !isShortLetterLabel(normalizePromptCandidate(string(match.Groups[0]))) {
 		return false
@@ -442,8 +466,12 @@ func matchContextBefore(match *types.Match, content []byte, radius int) []byte {
 }
 
 func isLikelyOpaqueSecretCandidate(value string) bool {
+	return isLikelyOpaqueSecretCandidateWithMinLength(value, 12)
+}
+
+func isLikelyOpaqueSecretCandidateWithMinLength(value string, minLength int) bool {
 	value = strings.TrimRight(strings.TrimSpace(value), "=")
-	if len(value) < 12 || len(value) > 256 {
+	if len(value) < minLength || len(value) > 256 {
 		return false
 	}
 

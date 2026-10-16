@@ -62,6 +62,60 @@ func TestJavaScriptClientSecretLiteral(t *testing.T) {
 	}
 }
 
+func TestJavaScriptAPISecretLiteral(t *testing.T) {
+	rule := loadBuiltinRuleByID(t, "leaklens.js.api-secret.1")
+	require.NoError(t, ValidateRule(rule))
+
+	m, err := matcher.NewPortableRegexp([]*types.Rule{rule}, 0)
+	require.NoError(t, err)
+	defer m.Close()
+
+	testCases := []struct {
+		name       string
+		content    string
+		wantSecret string
+	}{
+		{
+			name:       "camel case object property",
+			content:    `const config={CONTEXT_URL:"https://api.example.test/sales/",APPKEY:"example",ApiSecret:"Q7vN2mX9"};`,
+			wantSecret: "Q7vN2mX9",
+		},
+		{
+			name:       "snake case assignment",
+			content:    `const API_SECRET = 'Z8rM3pQ6';`,
+			wantSecret: "Z8rM3pQ6",
+		},
+		{
+			name:       "quoted hyphenated property",
+			content:    `const config={"api-secret":"M4kP8vR2"};`,
+			wantSecret: "M4kP8vR2",
+		},
+		{name: "runtime reference", content: `const config={apiSecret:runtime.apiSecret};`},
+		{name: "environment interpolation", content: `const config={apiSecret:"${API_SECRET}"};`},
+		{name: "obvious placeholder", content: `const config={apiSecret:"YOUR_API_SECRET_123"};`},
+		{name: "test placeholder", content: `const config={apiSecret:"test-api-secret-123"};`},
+		{name: "letters only", content: `const config={apiSecret:"abcdefgh"};`},
+		{name: "digits only", content: `const config={apiSecret:"12345678"};`},
+		{name: "low diversity", content: `const config={apiSecret:"A1A1A1A1"};`},
+		{name: "short value", content: `const config={apiSecret:"A1b2C3"};`},
+		{name: "label property", content: `const apiSecretLabel="Q7vN2mX9";`},
+		{name: "prefixed property", content: `const myApiSecret="Q7vN2mX9";`},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, err := m.Match([]byte(tc.content))
+			require.NoError(t, err)
+			if tc.wantSecret == "" {
+				require.Empty(t, matches)
+				return
+			}
+			require.Len(t, matches, 1)
+			require.Equal(t, tc.wantSecret, string(matches[0].NamedGroups["api_secret"]))
+		})
+	}
+}
+
 func TestClientSideBasicAuthenticationCredentialFlow(t *testing.T) {
 	rule := loadBuiltinRuleByID(t, "leaklens.js.basic-auth-flow.1")
 	require.NoError(t, ValidateRule(rule))
